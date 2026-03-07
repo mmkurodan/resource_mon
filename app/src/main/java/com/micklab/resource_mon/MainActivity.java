@@ -1,82 +1,74 @@
 package com.micklab.resource_mon;
 
 import android.app.Activity;
+import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
 import android.util.TypedValue;
-import android.view.View;
-import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
-import java.text.DateFormat;
-import java.util.Date;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicBoolean;
+import com.github.mikephil.charting.charts.LineChart;
+import com.github.mikephil.charting.data.Entry;
+import com.github.mikephil.charting.data.LineData;
+import com.github.mikephil.charting.data.LineDataSet;
+import com.github.mikephil.charting.interfaces.datasets.ILineDataSet;
+
+import java.util.ArrayList;
 
 public class MainActivity extends Activity {
-    private static final long REFRESH_INTERVAL_MS = 2000L;
+    private static final int MAX_POINTS = 60;
 
-    private final Handler mainHandler = new Handler(Looper.getMainLooper());
-    private final AtomicBoolean refreshInFlight = new AtomicBoolean(false);
-    private final DateFormat timeFormat = DateFormat.getTimeInstance(DateFormat.MEDIUM);
-    private final Runnable refreshTicker = new Runnable() {
+    private LineChart cpuChart;
+    private LineChart ramChart;
+    private LineChart romChart;
+    private LineChart netChart;
+
+    private MetricsSampler sampler;
+    private final MetricsSampler.Listener listener = new MetricsSampler.Listener() {
         @Override
-        public void run() {
-            requestRefresh();
-            mainHandler.postDelayed(this, REFRESH_INTERVAL_MS);
+        public void onSample(MetricsSampler.MetricsSnapshot snapshot) {
+            addEntry(cpuChart, snapshot.cpuAverageHz, snapshot.cpuMaxHz);
+            addEntry(ramChart, snapshot.ramUsedMb, snapshot.ramTotalMb);
+            addEntry(romChart, snapshot.storageFreeMb, snapshot.storageTotalMb);
+            addEntry(netChart, snapshot.networkBytesPerSec, snapshot.networkMaxBytesPerSec);
         }
     };
-
-    private ExecutorService executorService;
-    private DeviceStatsCollector statsCollector;
-    private GpuInfoProbeView gpuInfoProbeView;
-
-    private TextView statusView;
-    private TextView overviewView;
-    private TextView cpuView;
-    private TextView gpuView;
-    private TextView npuView;
-    private TextView memoryView;
-    private TextView storageView;
-    private TextView networkView;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        statsCollector = new DeviceStatsCollector(this);
-        executorService = Executors.newSingleThreadExecutor();
         setContentView(buildContentView());
+        setupChart(cpuChart, "CPU Avg Hz", "CPU Max Hz", Color.RED);
+        setupChart(ramChart, "RAM Used (MB)", "RAM Max (MB)", Color.BLUE);
+        setupChart(romChart, "ROM Free (MB)", "ROM Max (MB)", Color.MAGENTA);
+        setupChart(netChart, "Network (B/s)", "Network Max (B/s)", Color.GREEN);
+
+        sampler = new MetricsSampler(this, 1000L);
+        sampler.addListener(listener);
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        gpuInfoProbeView.onResume();
-        gpuInfoProbeView.requestRender();
-        requestRefresh();
-        mainHandler.postDelayed(refreshTicker, REFRESH_INTERVAL_MS);
+        sampler.start();
     }
 
     @Override
     protected void onPause() {
-        mainHandler.removeCallbacks(refreshTicker);
-        gpuInfoProbeView.onPause();
+        sampler.stop();
         super.onPause();
     }
 
     @Override
     protected void onDestroy() {
-        mainHandler.removeCallbacks(refreshTicker);
-        executorService.shutdownNow();
+        sampler.removeListener(listener);
+        sampler.stop();
         super.onDestroy();
     }
 
-    private View buildContentView() {
+    private ScrollView buildContentView() {
         ScrollView scrollView = new ScrollView(this);
         LinearLayout container = new LinearLayout(this);
         container.setOrientation(LinearLayout.VERTICAL);
@@ -93,112 +85,87 @@ public class MainActivity extends Activity {
         container.addView(titleView);
 
         TextView subtitleView = new TextView(this);
-        subtitleView.setText(
-                "CPU, GPU, NPU, RAM, ROM, and network telemetry with live refresh. "
-                        + "GPU/NPU usage is best-effort because Android and OEMs expose different metrics.");
+        subtitleView.setText("CPU, RAM, ROM, Network usage (live) - legend: Current / Max");
         subtitleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
         subtitleView.setPadding(0, dp(8), 0, dp(12));
         container.addView(subtitleView);
 
-        Button refreshButton = new Button(this);
-        refreshButton.setText("Refresh now");
-        refreshButton.setAllCaps(false);
-        refreshButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                requestRefresh();
-            }
-        });
-        container.addView(refreshButton);
-
-        statusView = createContentTextView();
-        statusView.setPadding(0, dp(12), 0, 0);
-        statusView.setText("Initializing...");
-        container.addView(statusView);
-
-        overviewView = addSection(container, "Device overview");
-        cpuView = addSection(container, "CPU");
-        gpuView = addSection(container, "GPU");
-        npuView = addSection(container, "NPU / AI accelerator");
-        memoryView = addSection(container, "RAM");
-        storageView = addSection(container, "ROM / storage");
-        networkView = addSection(container, "Network");
-
-        gpuInfoProbeView = new GpuInfoProbeView(this, new GpuInfoProbeView.Listener() {
-            @Override
-            public void onGpuInfoReady(String vendor, String renderer, String version) {
-                statsCollector.updateGpuInfo(vendor, renderer, version);
-                requestRefresh();
-            }
-        });
-        gpuInfoProbeView.setLayoutParams(new LinearLayout.LayoutParams(1, 1));
-        gpuInfoProbeView.setAlpha(0.01f);
-        container.addView(gpuInfoProbeView);
+        cpuChart = addChartSection(container, "CPU");
+        ramChart = addChartSection(container, "RAM");
+        romChart = addChartSection(container, "ROM");
+        netChart = addChartSection(container, "Network");
 
         return scrollView;
     }
 
-    private TextView addSection(LinearLayout parent, String title) {
+    private LineChart addChartSection(LinearLayout parent, String title) {
         TextView titleView = new TextView(this);
         titleView.setText(title);
         titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f);
         titleView.setTypeface(Typeface.DEFAULT_BOLD);
-        titleView.setPadding(0, dp(18), 0, dp(6));
+        titleView.setPadding(0, dp(14), 0, dp(6));
         parent.addView(titleView);
 
-        TextView contentView = createContentTextView();
-        parent.addView(contentView);
-        return contentView;
+        LineChart chart = new LineChart(this);
+        chart.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(200)));
+        parent.addView(chart);
+        return chart;
     }
 
-    private TextView createContentTextView() {
-        TextView textView = new TextView(this);
-        textView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
-        textView.setTypeface(Typeface.MONOSPACE);
-        textView.setTextIsSelectable(true);
-        textView.setLineSpacing(0f, 1.1f);
-        return textView;
+    private void setupChart(LineChart chart, String currentLabel, String maxLabel, int color) {
+        chart.getDescription().setEnabled(false);
+        chart.setTouchEnabled(true);
+        chart.setDrawGridBackground(false);
+        chart.setPinchZoom(true);
+        chart.getAxisRight().setEnabled(false);
+        chart.getXAxis().setEnabled(false);
+        chart.getAxisLeft().setAxisMinimum(0f);
+        chart.getLegend().setEnabled(true);
+
+        LineDataSet currentSet = new LineDataSet(new ArrayList<Entry>(), currentLabel);
+        currentSet.setColor(color);
+        currentSet.setDrawCircles(false);
+        currentSet.setDrawValues(false);
+        currentSet.setLineWidth(2f);
+
+        LineDataSet maxSet = new LineDataSet(new ArrayList<Entry>(), maxLabel);
+        maxSet.setColor(Color.DKGRAY);
+        maxSet.enableDashedLine(10f, 8f, 0f);
+        maxSet.setDrawCircles(false);
+        maxSet.setDrawValues(false);
+        maxSet.setLineWidth(1.5f);
+
+        chart.setData(new LineData(currentSet, maxSet));
+        chart.invalidate();
     }
 
-    private void requestRefresh() {
-        if (!refreshInFlight.compareAndSet(false, true)) {
+    private void addEntry(LineChart chart, long currentValue, long maxValue) {
+        LineData data = chart.getData();
+        if (data == null) {
             return;
         }
-        statusView.setText("Refreshing metrics...");
-        executorService.execute(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    final DeviceStatsCollector.Snapshot snapshot = statsCollector.collect();
-                    mainHandler.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            renderSnapshot(snapshot);
-                        }
-                    });
-                } finally {
-                    mainHandler.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            refreshInFlight.set(false);
-                        }
-                    });
-                }
-            }
-        });
-    }
+        ILineDataSet currentDataSet = data.getDataSetByIndex(0);
+        ILineDataSet maxDataSet = data.getDataSetByIndex(1);
+        if (!(currentDataSet instanceof LineDataSet) || !(maxDataSet instanceof LineDataSet)) {
+            return;
+        }
+        LineDataSet currentSet = (LineDataSet) currentDataSet;
+        float x = currentSet.getEntryCount();
+        float current = Math.max(0f, (float) currentValue);
+        float max = Math.max((float) maxValue, current);
+        if (max <= 0f) {
+            max = 1f;
+        }
 
-    private void renderSnapshot(DeviceStatsCollector.Snapshot snapshot) {
-        statusView.setText(
-                "Last updated: " + timeFormat.format(new Date(snapshot.collectedAtMillis))
-                        + "  |  auto refresh: 2s");
-        overviewView.setText(snapshot.overview);
-        cpuView.setText(snapshot.cpu);
-        gpuView.setText(snapshot.gpu);
-        npuView.setText(snapshot.npu);
-        memoryView.setText(snapshot.memory);
-        storageView.setText(snapshot.storage);
-        networkView.setText(snapshot.network);
+        data.addEntry(new Entry(x, current), 0);
+        data.addEntry(new Entry(x, max), 1);
+        data.notifyDataChanged();
+        chart.notifyDataSetChanged();
+        chart.getAxisLeft().setAxisMaximum(max);
+        chart.setVisibleXRangeMaximum(MAX_POINTS);
+        chart.moveViewToX(currentSet.getEntryCount());
     }
 
     private int dp(int value) {

@@ -14,7 +14,8 @@ Usage: ./test-before-aapt2.sh [module] [--pre-only|--from-aapt2|--full] [--clean
   --pre-only    Run only pre-AAPT2 compile tasks
   --from-aapt2  Run AAPT2 and later tasks (resource processing, APK build, tests)
   --full        Run both pre-AAPT2 and AAPT2+ tasks (default)
-  --clean       Remove build artifacts and generated local.properties at exit
+  --clean       Force-remove build artifacts and generated local.properties at exit
+  note          On successful APK build, APK is copied to ~/downloads and intermediates are cleaned
 EOF
 }
 
@@ -77,6 +78,7 @@ gradle -v 2>/dev/null | sed -n '1,8p' || true
 
 LOG_DIR="$REPO_ROOT/test_logs_$(date +%Y%m%d%H%M%S)"
 mkdir -p "$LOG_DIR"
+DOWNLOADS_DIR="${APK_OUTPUT_DIR:-$HOME/downloads}"
 
 if [ -x "./gradlew" ]; then
   GRADLE_RUNNER="./gradlew"
@@ -95,6 +97,7 @@ if [ -n "${ANDROID_SDK_ROOT:-}" ] && [ -d "${ANDROID_SDK_ROOT:-}" ] && [ ! -f "$
   printf 'sdk.dir=%s\n' "$ANDROID_SDK_ROOT" > "$REPO_ROOT/local.properties"
   GENERATED_LOCAL_PROPERTIES=1
 fi
+APK_COPIED=0
 
 resolve_aapt2_bin() {
   if [ -n "${AAPT2_BIN:-}" ] && [ -x "$AAPT2_BIN" ]; then
@@ -177,14 +180,21 @@ fi
 
 APK_GLOB="$REPO_ROOT/$MODULE/build/outputs/apk/debug"
 APK_PATH="$(find "$APK_GLOB" -maxdepth 1 -type f -name '*.apk' 2>/dev/null | sort | tail -n 1 || true)"
-if [ -n "$APK_PATH" ]; then
+if [ "$RC" -eq 0 ] && [ -n "$APK_PATH" ]; then
   echo "APK: $APK_PATH"
+  mkdir -p "$DOWNLOADS_DIR"
+  APK_DEST="$DOWNLOADS_DIR/$(basename "$APK_PATH")"
+  cp -f "$APK_PATH" "$APK_DEST"
+  APK_COPIED=1
+  echo "APK copied to: $APK_DEST"
+elif [ "$RC" -ne 0 ]; then
+  echo "Skipping APK copy because Gradle tasks failed."
 else
   echo "APK not found under: $APK_GLOB"
 fi
 
 cleanup() {
-  if [ "$CLEAN_ON_EXIT" -ne 1 ]; then
+  if [ "$CLEAN_ON_EXIT" -ne 1 ] && [ "$APK_COPIED" -ne 1 ]; then
     return
   fi
   echo "Cleaning build artifacts..."
