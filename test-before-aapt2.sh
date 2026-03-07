@@ -41,16 +41,24 @@ gradle -v 2>/dev/null | sed -n '1,5p' || true
 LOG_DIR="$REPO_ROOT/pre_aapt2_test_logs_$(date +%Y%m%d%H%M%S)"
 mkdir -p "$LOG_DIR"
 
-GRADLE_CMD=("./gradlew" "test" "--no-daemon" "--console=plain"
-  "-x" ":$MODULE:processDebugResources"
-  "-x" ":$MODULE:mergeDebugResources"
-  "-x" ":$MODULE:packageDebugResources"
-  "-x" ":$MODULE:processReleaseResources"
-  "-x" ":$MODULE:mergeReleaseResources"
-  "-x" ":$MODULE:packageReleaseResources"
-  "-x" ":$MODULE:parseDebugLocalResources"
-  "-x" ":$MODULE:generateDebugResources"
-  "-x" ":$MODULE:generateReleaseResources")
+if [ -x "./gradlew" ]; then
+  GRADLE_RUNNER="./gradlew"
+else
+  GRADLE_RUNNER="$(command -v gradle || true)"
+fi
+
+if [ -z "${GRADLE_RUNNER:-}" ]; then
+  echo "No Gradle runner found (expected ./gradlew or gradle in PATH)." >&2
+  exit 127
+fi
+
+echo "Gradle runner: $GRADLE_RUNNER"
+
+GRADLE_CMD=("$GRADLE_RUNNER"
+  ":$MODULE:compileDebugJavaWithJavac"
+  ":$MODULE:compileDebugUnitTestJavaWithJavac"
+  "--no-daemon"
+  "--console=plain")
 
 echo "Running: ${GRADLE_CMD[*]}"
 
@@ -64,7 +72,7 @@ echo "Gradle exit code: $RC"
 echo "Logs saved to: $LOG_DIR/gradle-output.log"
 
 echo "Attempting :$MODULE:testDebugUnitTest (logs also saved)"
-./gradlew ":$MODULE:testDebugUnitTest" --no-daemon --console=plain >"$LOG_DIR/testDebugUnitTest.log" 2>&1 || true
+"$GRADLE_RUNNER" ":$MODULE:testDebugUnitTest" --no-daemon --console=plain >"$LOG_DIR/testDebugUnitTest.log" 2>&1 || true
 
 cleanup() {
   echo "Cleaning up project build artifacts..."
