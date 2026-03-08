@@ -1,51 +1,54 @@
 -- Merging decision tree log ---
 manifest
-ADDED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml:1:1-22:12
-INJECTED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml:1:1-22:12
-INJECTED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml:1:1-22:12
-INJECTED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml:1:1-22:12
+ADDED from /root/resource_mon/app/src/main/AndroidManifest.xml:1:1-22:12
+INJECTED from /root/resource_mon/app/src/main/AndroidManifest.xml:1:1-22:12
+INJECTED from /root/resource_mon/app/src/main/AndroidManifest.xml:1:1-22:12
+INJECTED from /root/resource_mon/app/src/main/AndroidManifest.xml:1:1-22:12
+MERGED from [com.github.PhilJay:MPAndroidChart:v3.1.0] /root/.gradle/caches/8.12/transforms/2c0ea10ed93abcb65f313b5abdeb8c30/transformed/jetified-MPAndroidChart-v3.1.0/AndroidManifest.xml:2:1-20:12
 	package
-		INJECTED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml
+		INJECTED from /root/resource_mon/app/src/main/AndroidManifest.xml
 	android:versionName
-		INJECTED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml
+		INJECTED from /root/resource_mon/app/src/main/AndroidManifest.xml
 	android:versionCode
-		INJECTED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml
+		INJECTED from /root/resource_mon/app/src/main/AndroidManifest.xml
 	xmlns:android
-		ADDED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml:1:11-69
+		ADDED from /root/resource_mon/app/src/main/AndroidManifest.xml:1:11-69
 uses-permission#android.permission.ACCESS_NETWORK_STATE
-ADDED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml:3:5-79
+ADDED from /root/resource_mon/app/src/main/AndroidManifest.xml:3:5-79
 	android:name
-		ADDED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml:3:22-76
+		ADDED from /root/resource_mon/app/src/main/AndroidManifest.xml:3:22-76
 application
-ADDED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml:5:5-20:19
-INJECTED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml:5:5-20:19
+ADDED from /root/resource_mon/app/src/main/AndroidManifest.xml:5:5-20:19
+INJECTED from /root/resource_mon/app/src/main/AndroidManifest.xml:5:5-20:19
 	android:extractNativeLibs
-		INJECTED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml
+		INJECTED from /root/resource_mon/app/src/main/AndroidManifest.xml
 	android:label
-		ADDED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml:6:9-41
+		ADDED from /root/resource_mon/app/src/main/AndroidManifest.xml:6:9-41
 	android:theme
-		ADDED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml:7:9-60
+		ADDED from /root/resource_mon/app/src/main/AndroidManifest.xml:7:9-60
 activity#com.micklab.resource_mon.MainActivity
-ADDED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml:9:9-18:20
+ADDED from /root/resource_mon/app/src/main/AndroidManifest.xml:9:9-18:20
 	android:exported
-		ADDED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml:11:13-36
+		ADDED from /root/resource_mon/app/src/main/AndroidManifest.xml:11:13-36
 	android:name
-		ADDED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml:10:13-41
+		ADDED from /root/resource_mon/app/src/main/AndroidManifest.xml:10:13-41
 intent-filter#action:name:android.intent.action.MAIN+category:name:android.intent.category.LAUNCHER
-ADDED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml:13:13-16:29
+ADDED from /root/resource_mon/app/src/main/AndroidManifest.xml:13:13-16:29
 action#android.intent.action.MAIN
-ADDED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml:14:17-69
+ADDED from /root/resource_mon/app/src/main/AndroidManifest.xml:14:17-69
 	android:name
-		ADDED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml:14:25-66
+		ADDED from /root/resource_mon/app/src/main/AndroidManifest.xml:14:25-66
 category#android.intent.category.LAUNCHER
-ADDED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml:15:17-77
+ADDED from /root/resource_mon/app/src/main/AndroidManifest.xml:15:17-77
 	android:name
-		ADDED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml:15:27-74
+		ADDED from /root/resource_mon/app/src/main/AndroidManifest.xml:15:27-74
 uses-sdk
-INJECTED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml reason: use-sdk injection requested
-INJECTED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml
-INJECTED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml
+INJECTED from /root/resource_mon/app/src/main/AndroidManifest.xml reason: use-sdk injection requested
+INJECTED from /root/resource_mon/app/src/main/AndroidManifest.xml
+INJECTED from /root/resource_mon/app/src/main/AndroidManifest.xml
+MERGED from [com.github.PhilJay:MPAndroidChart:v3.1.0] /root/.gradle/caches/8.12/transforms/2c0ea10ed93abcb65f313b5abdeb8c30/transformed/jetified-MPAndroidChart-v3.1.0/AndroidManifest.xml:16:5-18:41
+MERGED from [com.github.PhilJay:MPAndroidChart:v3.1.0] /root/.gradle/caches/8.12/transforms/2c0ea10ed93abcb65f313b5abdeb8c30/transformed/jetified-MPAndroidChart-v3.1.0/AndroidManifest.xml:16:5-18:41
 	android:targetSdkVersion
-		INJECTED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml
+		INJECTED from /root/resource_mon/app/src/main/AndroidManifest.xml
 	android:minSdkVersion
-		INJECTED from /root/resource_mon-wt/app/src/main/AndroidManifest.xml
+		INJECTED from /root/resource_mon/app/src/main/AndroidManifest.xml

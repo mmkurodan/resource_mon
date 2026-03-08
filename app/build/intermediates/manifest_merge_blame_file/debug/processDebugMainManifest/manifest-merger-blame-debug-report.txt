@@ -9,32 +9,32 @@
 9        android:targetSdkVersion="35" />
 10
 11    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-11-->/root/resource_mon-wt/app/src/main/AndroidManifest.xml:3:5-79
-11-->/root/resource_mon-wt/app/src/main/AndroidManifest.xml:3:22-76
+11-->/root/resource_mon/app/src/main/AndroidManifest.xml:3:5-79
+11-->/root/resource_mon/app/src/main/AndroidManifest.xml:3:22-76
 12
 13    <application
-13-->/root/resource_mon-wt/app/src/main/AndroidManifest.xml:5:5-20:19
+13-->/root/resource_mon/app/src/main/AndroidManifest.xml:5:5-20:19
 14        android:debuggable="true"
 15        android:extractNativeLibs="false"
 16        android:label="Resource Monitor"
-16-->/root/resource_mon-wt/app/src/main/AndroidManifest.xml:6:9-41
+16-->/root/resource_mon/app/src/main/AndroidManifest.xml:6:9-41
 17        android:theme="@android:style/Theme.Material.Light" >
-17-->/root/resource_mon-wt/app/src/main/AndroidManifest.xml:7:9-60
+17-->/root/resource_mon/app/src/main/AndroidManifest.xml:7:9-60
 18        <activity
-18-->/root/resource_mon-wt/app/src/main/AndroidManifest.xml:9:9-18:20
+18-->/root/resource_mon/app/src/main/AndroidManifest.xml:9:9-18:20
 19            android:name="com.micklab.resource_mon.MainActivity"
-19-->/root/resource_mon-wt/app/src/main/AndroidManifest.xml:10:13-41
+19-->/root/resource_mon/app/src/main/AndroidManifest.xml:10:13-41
 20            android:exported="true" >
-20-->/root/resource_mon-wt/app/src/main/AndroidManifest.xml:11:13-36
+20-->/root/resource_mon/app/src/main/AndroidManifest.xml:11:13-36
 21            <intent-filter>
-21-->/root/resource_mon-wt/app/src/main/AndroidManifest.xml:13:13-16:29
+21-->/root/resource_mon/app/src/main/AndroidManifest.xml:13:13-16:29
 22                <action android:name="android.intent.action.MAIN" />
-22-->/root/resource_mon-wt/app/src/main/AndroidManifest.xml:14:17-69
-22-->/root/resource_mon-wt/app/src/main/AndroidManifest.xml:14:25-66
+22-->/root/resource_mon/app/src/main/AndroidManifest.xml:14:17-69
+22-->/root/resource_mon/app/src/main/AndroidManifest.xml:14:25-66
 23
 24                <category android:name="android.intent.category.LAUNCHER" />
-24-->/root/resource_mon-wt/app/src/main/AndroidManifest.xml:15:17-77
-24-->/root/resource_mon-wt/app/src/main/AndroidManifest.xml:15:27-74
+24-->/root/resource_mon/app/src/main/AndroidManifest.xml:15:17-77
+24-->/root/resource_mon/app/src/main/AndroidManifest.xml:15:27-74
 25            </intent-filter>
 26        </activity>
 27    </application>
