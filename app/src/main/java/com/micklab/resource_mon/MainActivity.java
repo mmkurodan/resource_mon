@@ -31,7 +31,7 @@ public class MainActivity extends Activity {
         public void onSample(MetricsSampler.MetricsSnapshot snapshot) {
             addEntry(cpuChart, snapshot.cpuAverageHz, snapshot.cpuMaxHz);
             addEntry(ramChart, snapshot.ramUsedMb, snapshot.ramTotalMb);
-            addEntry(romChart, snapshot.storageFreeMb, snapshot.storageTotalMb);
+            addEntry(romChart, snapshot.storageTotalMb - snapshot.storageFreeMb, snapshot.storageTotalMb);
             addEntry(netChart, snapshot.networkBytesPerSec, snapshot.networkMaxBytesPerSec);
         }
     };
@@ -42,7 +42,7 @@ public class MainActivity extends Activity {
         setContentView(buildContentView());
         setupChart(cpuChart, "CPU Avg Hz", "CPU Max Hz", Color.RED);
         setupChart(ramChart, "RAM Used (MB)", "RAM Max (MB)", Color.BLUE);
-        setupChart(romChart, "ROM Free (MB)", "ROM Max (MB)", Color.MAGENTA);
+        setupChart(romChart, "ROM Used (MB)", "ROM Max (MB)", Color.MAGENTA);
         setupChart(netChart, "Network (B/s)", "Network Max (B/s)", Color.GREEN);
 
         sampler = new MetricsSampler(this, 1000L);

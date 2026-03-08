@@ -29,7 +29,7 @@ class MainActivity : AppCompatActivity() {
 
         setupChart(cpuChart, "CPU %", Color.RED)
         setupChart(ramChart, "RAM MB", Color.BLUE)
-        setupChart(romChart, "Free ROM MB", Color.MAGENTA)
+        setupChart(romChart, "Used ROM MB", Color.MAGENTA)
         setupChart(netChart, "Net B/s", Color.GREEN)
 
         sampler = MetricsSampler(this, 1000L)
@@ -38,7 +38,7 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 addEntry(cpuChart, s.cpuPercent)
                 addEntry(ramChart, s.ramUsedMb.toFloat())
-                addEntry(romChart, s.storageFreeMb.toFloat())
+                addEntry(romChart, (s.storageTotalMb - s.storageFreeMb).toFloat())
                 val net = s.rxBytes.toFloat() + s.txBytes.toFloat()
                 addEntry(netChart, net)
             }
