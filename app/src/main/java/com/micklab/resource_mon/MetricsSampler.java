@@ -11,10 +11,13 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.StatFs;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileReader;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 public final class MetricsSampler {
@@ -26,10 +29,12 @@ public final class MetricsSampler {
 
     public static final class MetricsSnapshot {
         public final long timestampMillis;
-        public final long cpuAverageHz;
-        public final long cpuMaxHz;
+        public final double cpuUsagePercent;
+        public final double cpuAverageMhz;
+        public final double cpuMaxMhz;
         public final long ramUsedMb;
         public final long ramTotalMb;
+        public final MemoryDetails memoryDetails;
         public final long storageFreeMb;
         public final long storageTotalMb;
         public final long networkBytesPerSec;
@@ -37,23 +42,103 @@ public final class MetricsSampler {
 
         MetricsSnapshot(
                 long timestampMillis,
-                long cpuAverageHz,
-                long cpuMaxHz,
+                double cpuUsagePercent,
+                double cpuAverageMhz,
+                double cpuMaxMhz,
                 long ramUsedMb,
                 long ramTotalMb,
+                MemoryDetails memoryDetails,
                 long storageFreeMb,
                 long storageTotalMb,
                 long networkBytesPerSec,
                 long networkMaxBytesPerSec) {
             this.timestampMillis = timestampMillis;
-            this.cpuAverageHz = cpuAverageHz;
-            this.cpuMaxHz = cpuMaxHz;
+            this.cpuUsagePercent = cpuUsagePercent;
+            this.cpuAverageMhz = cpuAverageMhz;
+            this.cpuMaxMhz = cpuMaxMhz;
             this.ramUsedMb = ramUsedMb;
             this.ramTotalMb = ramTotalMb;
+            this.memoryDetails = memoryDetails;
             this.storageFreeMb = storageFreeMb;
             this.storageTotalMb = storageTotalMb;
             this.networkBytesPerSec = networkBytesPerSec;
             this.networkMaxBytesPerSec = networkMaxBytesPerSec;
+        }
+
+        public double ramUsagePercent() {
+            if (ramTotalMb <= 0L) {
+                return 0d;
+            }
+            return Math.max(0d, Math.min(100d, (ramUsedMb * 100.0d) / ramTotalMb));
+        }
+    }
+
+    public static final class MemoryDetails {
+        public final long totalBytes;
+        public final long usedBytes;
+        public final long availableBytes;
+        public final long freeBytes;
+        public final long buffersBytes;
+        public final long cachedBytes;
+        public final long slabBytes;
+        public final long reclaimableSlabBytes;
+        public final long unreclaimableSlabBytes;
+        public final long activeBytes;
+        public final long inactiveBytes;
+        public final long shmemBytes;
+        public final long swapTotalBytes;
+        public final long swapFreeBytes;
+        public final long swapCachedBytes;
+
+        MemoryDetails(
+                long totalBytes,
+                long usedBytes,
+                long availableBytes,
+                long freeBytes,
+                long buffersBytes,
+                long cachedBytes,
+                long slabBytes,
+                long reclaimableSlabBytes,
+                long unreclaimableSlabBytes,
+                long activeBytes,
+                long inactiveBytes,
+                long shmemBytes,
+                long swapTotalBytes,
+                long swapFreeBytes,
+                long swapCachedBytes) {
+            this.totalBytes = totalBytes;
+            this.usedBytes = usedBytes;
+            this.availableBytes = availableBytes;
+            this.freeBytes = freeBytes;
+            this.buffersBytes = buffersBytes;
+            this.cachedBytes = cachedBytes;
+            this.slabBytes = slabBytes;
+            this.reclaimableSlabBytes = reclaimableSlabBytes;
+            this.unreclaimableSlabBytes = unreclaimableSlabBytes;
+            this.activeBytes = activeBytes;
+            this.inactiveBytes = inactiveBytes;
+            this.shmemBytes = shmemBytes;
+            this.swapTotalBytes = swapTotalBytes;
+            this.swapFreeBytes = swapFreeBytes;
+            this.swapCachedBytes = swapCachedBytes;
+        }
+
+        public long swapUsedBytes() {
+            return Math.max(0L, swapTotalBytes - swapFreeBytes);
+        }
+
+        public long cacheLikeBytes() {
+            return Math.max(0L, buffersBytes + cachedBytes + reclaimableSlabBytes);
+        }
+    }
+
+    private static final class CpuTotals {
+        final long total;
+        final long idle;
+
+        CpuTotals(long total, long idle) {
+            this.total = total;
+            this.idle = idle;
         }
     }
 
@@ -64,6 +149,7 @@ public final class MetricsSampler {
 
     private volatile boolean running;
     private Thread workerThread;
+    private CpuTotals previousCpuTotals;
     private long lastRxBytes = TrafficStats.getTotalRxBytes();
     private long lastTxBytes = TrafficStats.getTotalTxBytes();
 
@@ -119,33 +205,36 @@ public final class MetricsSampler {
     }
 
     private MetricsSnapshot sample() {
-        long[] cpuFrequency = readCpuAverageFrequencyHz();
-        long[] memory = readMemoryMb();
+        double[] cpuFrequency = readCpuAverageFrequencyMhz();
+        double cpuUsagePercent = readCpuUsagePercent();
+        MemoryDetails memoryDetails = readMemoryDetails();
         long[] storage = readStorageMb();
         long[] network = readNetworkBytesPerSecond();
         long networkBytesPerSec = Math.max(0L, network[0]) + Math.max(0L, network[1]);
         long networkMaxBytesPerSec = readNetworkMaxBytesPerSecond();
         return new MetricsSnapshot(
                 System.currentTimeMillis(),
+                cpuUsagePercent,
                 cpuFrequency[0],
                 cpuFrequency[1],
-                memory[0],
-                memory[1],
+                memoryDetails.usedBytes / 1024L / 1024L,
+                memoryDetails.totalBytes / 1024L / 1024L,
+                memoryDetails,
                 storage[0],
                 storage[1],
                 networkBytesPerSec,
                 networkMaxBytesPerSec);
     }
 
-    private long[] readCpuAverageFrequencyHz() {
+    private double[] readCpuAverageFrequencyMhz() {
         File cpuRoot = new File(CPU_SYSFS_ROOT);
         File[] cpuEntries = cpuRoot.listFiles();
         if (cpuEntries == null || cpuEntries.length == 0) {
-            return new long[]{0L, 0L};
+            return new double[]{0d, 0d};
         }
 
-        long currentHzSum = 0L;
-        long maxHzSum = 0L;
+        double currentMhzSum = 0d;
+        double maxMhzSum = 0d;
         int currentCount = 0;
         int maxCount = 0;
 
@@ -160,21 +249,21 @@ public final class MetricsSampler {
                     new String[]{"scaling_cur_freq", "cpuinfo_cur_freq"});
             Long maxKHz = readLongFromCandidates(
                     cpufreqDir,
-                    new String[]{"scaling_max_freq", "cpuinfo_max_freq"});
+                    new String[]{"cpuinfo_max_freq", "scaling_max_freq"});
 
             if (currentKHz != null && currentKHz.longValue() > 0L) {
-                currentHzSum += currentKHz.longValue() * 1000L;
+                currentMhzSum += currentKHz.longValue() / 1000.0d;
                 currentCount++;
             }
             if (maxKHz != null && maxKHz.longValue() > 0L) {
-                maxHzSum += maxKHz.longValue() * 1000L;
+                maxMhzSum += maxKHz.longValue() / 1000.0d;
                 maxCount++;
             }
         }
 
-        long averageCurrentHz = currentCount > 0 ? currentHzSum / currentCount : 0L;
-        long averageMaxHz = maxCount > 0 ? maxHzSum / maxCount : 0L;
-        return new long[]{averageCurrentHz, averageMaxHz};
+        double averageCurrentMhz = currentCount > 0 ? currentMhzSum / currentCount : 0d;
+        double averageMaxMhz = maxCount > 0 ? maxMhzSum / maxCount : 0d;
+        return new double[]{averageCurrentMhz, averageMaxMhz};
     }
 
     private Long readLongFromCandidates(File directory, String[] fileNames) {
@@ -207,18 +296,165 @@ public final class MetricsSampler {
         }
     }
 
-    private long[] readMemoryMb() {
+    private double readCpuUsagePercent() {
+        CpuTotals currentTotals = readCpuTotals();
+        if (currentTotals == null) {
+            return 0d;
+        }
+        if (previousCpuTotals == null) {
+            previousCpuTotals = currentTotals;
+            return 0d;
+        }
+
+        CpuTotals baseline = previousCpuTotals;
+        previousCpuTotals = currentTotals;
+        long totalDelta = currentTotals.total - baseline.total;
+        long idleDelta = currentTotals.idle - baseline.idle;
+        if (totalDelta <= 0L) {
+            return 0d;
+        }
+        double ratio = (double) (totalDelta - idleDelta) / (double) totalDelta;
+        return Math.max(0d, Math.min(100d, ratio * 100.0d));
+    }
+
+    private CpuTotals readCpuTotals() {
+        String line = readFirstLine("/proc/stat");
+        if (line == null) {
+            return null;
+        }
+
+        String[] parts = line.trim().split("\\s+");
+        if (parts.length < 5 || !"cpu".equals(parts[0])) {
+            return null;
+        }
+
+        long total = 0L;
+        for (int index = 1; index < parts.length; index++) {
+            Long value = parseLongOrNull(parts[index]);
+            if (value == null) {
+                return null;
+            }
+            total += value.longValue();
+        }
+
+        Long idle = parseLongOrNull(parts[4]);
+        if (idle == null) {
+            return null;
+        }
+        if (parts.length > 5) {
+            Long ioWait = parseLongOrNull(parts[5]);
+            if (ioWait != null) {
+                idle = Long.valueOf(idle.longValue() + ioWait.longValue());
+            }
+        }
+        return new CpuTotals(total, idle.longValue());
+    }
+
+    private MemoryDetails readMemoryDetails() {
         ActivityManager activityManager =
                 (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
-        if (activityManager == null) {
-            return new long[]{0L, 0L};
-        }
         ActivityManager.MemoryInfo memoryInfo = new ActivityManager.MemoryInfo();
-        activityManager.getMemoryInfo(memoryInfo);
-        long totalMb = memoryInfo.totalMem / 1024L / 1024L;
-        long availableMb = memoryInfo.availMem / 1024L / 1024L;
-        long usedMb = Math.max(0L, totalMb - availableMb);
-        return new long[]{usedMb, totalMb};
+        if (activityManager != null) {
+            activityManager.getMemoryInfo(memoryInfo);
+        }
+
+        long totalBytes = memoryInfo.totalMem;
+        long availableBytes = memoryInfo.availMem;
+        long freeBytes = 0L;
+        long buffersBytes = 0L;
+        long cachedBytes = 0L;
+        long slabBytes = 0L;
+        long reclaimableSlabBytes = 0L;
+        long unreclaimableSlabBytes = 0L;
+        long activeBytes = 0L;
+        long inactiveBytes = 0L;
+        long shmemBytes = 0L;
+        long swapTotalBytes = 0L;
+        long swapFreeBytes = 0L;
+        long swapCachedBytes = 0L;
+
+        try (BufferedReader reader = new BufferedReader(new FileReader("/proc/meminfo"))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                int colonIndex = line.indexOf(':');
+                if (colonIndex <= 0) {
+                    continue;
+                }
+
+                String key = line.substring(0, colonIndex).trim();
+                String rawValue = line.substring(colonIndex + 1).trim();
+                String[] parts = rawValue.split("\\s+");
+                if (parts.length == 0) {
+                    continue;
+                }
+                Long numericValue = parseLongOrNull(parts[0]);
+                if (numericValue == null) {
+                    continue;
+                }
+                long valueBytes = numericValue.longValue() * 1024L;
+
+                if ("MemTotal".equals(key)) {
+                    totalBytes = valueBytes;
+                } else if ("MemAvailable".equals(key)) {
+                    availableBytes = valueBytes;
+                } else if ("MemFree".equals(key)) {
+                    freeBytes = valueBytes;
+                } else if ("Buffers".equals(key)) {
+                    buffersBytes = valueBytes;
+                } else if ("Cached".equals(key)) {
+                    cachedBytes = valueBytes;
+                } else if ("Slab".equals(key)) {
+                    slabBytes = valueBytes;
+                } else if ("SReclaimable".equals(key)) {
+                    reclaimableSlabBytes = valueBytes;
+                } else if ("SUnreclaim".equals(key)) {
+                    unreclaimableSlabBytes = valueBytes;
+                } else if ("Active".equals(key)) {
+                    activeBytes = valueBytes;
+                } else if ("Inactive".equals(key)) {
+                    inactiveBytes = valueBytes;
+                } else if ("Shmem".equals(key)) {
+                    shmemBytes = valueBytes;
+                } else if ("SwapTotal".equals(key)) {
+                    swapTotalBytes = valueBytes;
+                } else if ("SwapFree".equals(key)) {
+                    swapFreeBytes = valueBytes;
+                } else if ("SwapCached".equals(key)) {
+                    swapCachedBytes = valueBytes;
+                }
+            }
+        } catch (IOException ignored) {
+            // Fall back to ActivityManager totals when /proc/meminfo is unavailable.
+        }
+
+        if (slabBytes <= 0L && (reclaimableSlabBytes > 0L || unreclaimableSlabBytes > 0L)) {
+            slabBytes = reclaimableSlabBytes + unreclaimableSlabBytes;
+        }
+        if (totalBytes <= 0L) {
+            totalBytes = 0L;
+        }
+        if (availableBytes < 0L) {
+            availableBytes = 0L;
+        }
+        long usedBytes = totalBytes > 0L
+                ? Math.max(0L, totalBytes - availableBytes)
+                : Math.max(0L, totalBytes - freeBytes);
+        return new MemoryDetails(
+                totalBytes,
+                usedBytes,
+                availableBytes,
+                freeBytes,
+                buffersBytes,
+                cachedBytes,
+                slabBytes,
+                reclaimableSlabBytes,
+                unreclaimableSlabBytes,
+                activeBytes,
+                inactiveBytes,
+                shmemBytes,
+                swapTotalBytes,
+                swapFreeBytes,
+                swapCachedBytes);
     }
 
     private long[] readStorageMb() {
