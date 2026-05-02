@@ -32,6 +32,7 @@ public final class ProcessInspector {
         public final int importance;
         public final String memoryText;
         public final String cpuText;
+        public final String addressSpaceText;
         public final long memorySortValue;
         public final double cpuSortValue;
         public final String packageSummary;
@@ -43,6 +44,7 @@ public final class ProcessInspector {
                 int importance,
                 String memoryText,
                 String cpuText,
+                String addressSpaceText,
                 long memorySortValue,
                 double cpuSortValue,
                 String packageSummary) {
@@ -52,6 +54,7 @@ public final class ProcessInspector {
             this.importance = importance;
             this.memoryText = memoryText;
             this.cpuText = cpuText;
+            this.addressSpaceText = addressSpaceText;
             this.memorySortValue = memorySortValue;
             this.cpuSortValue = cpuSortValue;
             this.packageSummary = packageSummary;
@@ -105,6 +108,16 @@ public final class ProcessInspector {
 
         ProcessCpuSample(long totalTicks) {
             this.totalTicks = totalTicks;
+        }
+    }
+
+    private static final class ProcessAddressSpaceSample {
+        final long currentKb;
+        final long peakKb;
+
+        ProcessAddressSpaceSample(long currentKb, long peakKb) {
+            this.currentKb = currentKb;
+            this.peakKb = peakKb;
         }
     }
 
@@ -201,6 +214,9 @@ public final class ProcessInspector {
                 }
             }
 
+            ProcessAddressSpaceSample addressSpaceSample = readProcessAddressSpace(processInfo.pid);
+            String addressSpaceText = formatAddressSpace(addressSpaceSample);
+
             String packageSummary = processInfo.pkgList == null || processInfo.pkgList.length == 0
                     ? processInfo.processName
                     : TextUtils.join(", ", processInfo.pkgList);
@@ -211,6 +227,7 @@ public final class ProcessInspector {
                     processInfo.importance,
                     memoryText,
                     cpuText,
+                    addressSpaceText,
                     memoryKb,
                     Double.isNaN(cpuPercent) ? -1d : cpuPercent,
                     packageSummary));
@@ -368,6 +385,41 @@ public final class ProcessInspector {
         return new ProcessCpuSample(userTicks.longValue() + systemTicks.longValue());
     }
 
+    private ProcessAddressSpaceSample readProcessAddressSpace(int pid) {
+        long currentKb = 0L;
+        long peakKb = 0L;
+        try (BufferedReader reader = new BufferedReader(new FileReader("/proc/" + pid + "/status"))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                int colonIndex = line.indexOf(':');
+                if (colonIndex <= 0) {
+                    continue;
+                }
+                String key = line.substring(0, colonIndex).trim();
+                String rawValue = line.substring(colonIndex + 1).trim();
+                String[] parts = rawValue.split("\\s+");
+                if (parts.length == 0) {
+                    continue;
+                }
+                Long valueKb = parseLong(parts[0]);
+                if (valueKb == null) {
+                    continue;
+                }
+                if ("VmSize".equals(key)) {
+                    currentKb = valueKb.longValue();
+                } else if ("VmPeak".equals(key)) {
+                    peakKb = valueKb.longValue();
+                }
+            }
+        } catch (IOException ignored) {
+            return null;
+        }
+        if (currentKb <= 0L && peakKb <= 0L) {
+            return null;
+        }
+        return new ProcessAddressSpaceSample(currentKb, peakKb);
+    }
+
     private String readFirstLine(String path) {
         try (BufferedReader reader = new BufferedReader(new FileReader(path))) {
             return reader.readLine();
@@ -386,5 +438,18 @@ public final class ProcessInspector {
 
     private String formatKilobytes(long kilobytes) {
         return android.text.format.Formatter.formatShortFileSize(context, kilobytes * 1024L);
+    }
+
+    private String formatAddressSpace(ProcessAddressSpaceSample sample) {
+        if (sample == null) {
+            return "Unavailable";
+        }
+        if (sample.currentKb > 0L && sample.peakKb > 0L) {
+            return formatKilobytes(sample.currentKb) + " / peak " + formatKilobytes(sample.peakKb);
+        }
+        if (sample.currentKb > 0L) {
+            return formatKilobytes(sample.currentKb);
+        }
+        return "Peak " + formatKilobytes(sample.peakKb);
     }
 }

@@ -16,8 +16,9 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 public final class MetricsSampler {
@@ -89,6 +90,10 @@ public final class MetricsSampler {
         public final long swapTotalBytes;
         public final long swapFreeBytes;
         public final long swapCachedBytes;
+        public final long committedBytes;
+        public final long commitLimitBytes;
+        public final long vmallocUsedBytes;
+        public final long vmallocTotalBytes;
 
         MemoryDetails(
                 long totalBytes,
@@ -105,7 +110,11 @@ public final class MetricsSampler {
                 long shmemBytes,
                 long swapTotalBytes,
                 long swapFreeBytes,
-                long swapCachedBytes) {
+                long swapCachedBytes,
+                long committedBytes,
+                long commitLimitBytes,
+                long vmallocUsedBytes,
+                long vmallocTotalBytes) {
             this.totalBytes = totalBytes;
             this.usedBytes = usedBytes;
             this.availableBytes = availableBytes;
@@ -121,6 +130,10 @@ public final class MetricsSampler {
             this.swapTotalBytes = swapTotalBytes;
             this.swapFreeBytes = swapFreeBytes;
             this.swapCachedBytes = swapCachedBytes;
+            this.committedBytes = committedBytes;
+            this.commitLimitBytes = commitLimitBytes;
+            this.vmallocUsedBytes = vmallocUsedBytes;
+            this.vmallocTotalBytes = vmallocTotalBytes;
         }
 
         public long swapUsedBytes() {
@@ -129,6 +142,13 @@ public final class MetricsSampler {
 
         public long cacheLikeBytes() {
             return Math.max(0L, buffersBytes + cachedBytes + reclaimableSlabBytes);
+        }
+
+        public double committedPercent() {
+            if (commitLimitBytes <= 0L) {
+                return 0d;
+            }
+            return Math.max(0d, Math.min(100d, (committedBytes * 100.0d) / commitLimitBytes));
         }
     }
 
@@ -146,10 +166,10 @@ public final class MetricsSampler {
     private final long intervalMs;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final List<Listener> listeners = new CopyOnWriteArrayList<>();
+    private final Map<String, CpuTotals> previousCpuCoreTotals = new HashMap<>();
 
     private volatile boolean running;
     private Thread workerThread;
-    private CpuTotals previousCpuTotals;
     private long lastRxBytes = TrafficStats.getTotalRxBytes();
     private long lastTxBytes = TrafficStats.getTotalTxBytes();
 
@@ -206,7 +226,7 @@ public final class MetricsSampler {
 
     private MetricsSnapshot sample() {
         double[] cpuFrequency = readCpuAverageFrequencyMhz();
-        double cpuUsagePercent = readCpuUsagePercent();
+        double cpuUsagePercent = readCpuUsagePercent(cpuFrequency[0], cpuFrequency[1]);
         MemoryDetails memoryDetails = readMemoryDetails();
         long[] storage = readStorageMb();
         long[] network = readNetworkBytesPerSecond();
@@ -296,38 +316,73 @@ public final class MetricsSampler {
         }
     }
 
-    private double readCpuUsagePercent() {
-        CpuTotals currentTotals = readCpuTotals();
-        if (currentTotals == null) {
-            return 0d;
-        }
-        if (previousCpuTotals == null) {
-            previousCpuTotals = currentTotals;
-            return 0d;
+    private double readCpuUsagePercent(double cpuAverageMhz, double cpuMaxMhz) {
+        double coreUsagePercent = readCpuCoreUsagePercent();
+        if (!Double.isNaN(coreUsagePercent) && coreUsagePercent > 0d) {
+            return coreUsagePercent;
         }
 
-        CpuTotals baseline = previousCpuTotals;
-        previousCpuTotals = currentTotals;
-        long totalDelta = currentTotals.total - baseline.total;
-        long idleDelta = currentTotals.idle - baseline.idle;
-        if (totalDelta <= 0L) {
-            return 0d;
+        double frequencyPercent = readCpuFrequencyPercent(cpuAverageMhz, cpuMaxMhz);
+        if (frequencyPercent > 0d) {
+            return frequencyPercent;
         }
-        double ratio = (double) (totalDelta - idleDelta) / (double) totalDelta;
-        return Math.max(0d, Math.min(100d, ratio * 100.0d));
+        return Double.isNaN(coreUsagePercent) ? 0d : coreUsagePercent;
     }
 
-    private CpuTotals readCpuTotals() {
-        String line = readFirstLine("/proc/stat");
-        if (line == null) {
-            return null;
+    private double readCpuCoreUsagePercent() {
+        Map<String, CpuTotals> currentCpuCoreTotals = new HashMap<>();
+        double usagePercentSum = 0d;
+        int sampledCoreCount = 0;
+
+        try (BufferedReader reader = new BufferedReader(new FileReader("/proc/stat"))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (!line.startsWith("cpu")) {
+                    break;
+                }
+                String[] parts = line.trim().split("\\s+");
+                if (parts.length < 5 || !parts[0].matches("cpu\\d+")) {
+                    continue;
+                }
+                CpuTotals currentTotals = parseCpuTotals(parts);
+                if (currentTotals == null) {
+                    continue;
+                }
+                currentCpuCoreTotals.put(parts[0], currentTotals);
+
+                CpuTotals baseline = previousCpuCoreTotals.get(parts[0]);
+                if (baseline == null) {
+                    continue;
+                }
+                long totalDelta = currentTotals.total - baseline.total;
+                long idleDelta = currentTotals.idle - baseline.idle;
+                if (totalDelta <= 0L || idleDelta < 0L) {
+                    continue;
+                }
+                usagePercentSum += ((totalDelta - idleDelta) * 100.0d) / totalDelta;
+                sampledCoreCount++;
+            }
+        } catch (IOException ignored) {
+            previousCpuCoreTotals.clear();
+            return Double.NaN;
         }
 
-        String[] parts = line.trim().split("\\s+");
-        if (parts.length < 5 || !"cpu".equals(parts[0])) {
-            return null;
+        previousCpuCoreTotals.clear();
+        previousCpuCoreTotals.putAll(currentCpuCoreTotals);
+        if (sampledCoreCount <= 0) {
+            return Double.NaN;
         }
+        return Math.max(0d, Math.min(100d, usagePercentSum / sampledCoreCount));
+    }
 
+    private double readCpuFrequencyPercent(double cpuAverageMhz, double cpuMaxMhz) {
+        if (cpuAverageMhz <= 0d || cpuMaxMhz <= 0d) {
+            return 0d;
+        }
+        return Math.max(0d, Math.min(100d, (cpuAverageMhz * 100.0d) / cpuMaxMhz));
+    }
+
+    private CpuTotals parseCpuTotals(String[] parts) {
         long total = 0L;
         for (int index = 1; index < parts.length; index++) {
             Long value = parseLongOrNull(parts[index]);
@@ -372,6 +427,10 @@ public final class MetricsSampler {
         long swapTotalBytes = 0L;
         long swapFreeBytes = 0L;
         long swapCachedBytes = 0L;
+        long committedBytes = 0L;
+        long commitLimitBytes = 0L;
+        long vmallocUsedBytes = 0L;
+        long vmallocTotalBytes = 0L;
 
         try (BufferedReader reader = new BufferedReader(new FileReader("/proc/meminfo"))) {
             String line;
@@ -421,6 +480,14 @@ public final class MetricsSampler {
                     swapFreeBytes = valueBytes;
                 } else if ("SwapCached".equals(key)) {
                     swapCachedBytes = valueBytes;
+                } else if ("Committed_AS".equals(key)) {
+                    committedBytes = valueBytes;
+                } else if ("CommitLimit".equals(key)) {
+                    commitLimitBytes = valueBytes;
+                } else if ("VmallocUsed".equals(key)) {
+                    vmallocUsedBytes = valueBytes;
+                } else if ("VmallocTotal".equals(key)) {
+                    vmallocTotalBytes = valueBytes;
                 }
             }
         } catch (IOException ignored) {
@@ -454,7 +521,11 @@ public final class MetricsSampler {
                 shmemBytes,
                 swapTotalBytes,
                 swapFreeBytes,
-                swapCachedBytes);
+                swapCachedBytes,
+                committedBytes,
+                commitLimitBytes,
+                vmallocUsedBytes,
+                vmallocTotalBytes);
     }
 
     private long[] readStorageMb() {

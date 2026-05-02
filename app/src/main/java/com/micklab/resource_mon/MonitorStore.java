@@ -137,6 +137,10 @@ public final class MonitorStore {
         object.put("swapTotalBytes", memoryDetails.swapTotalBytes);
         object.put("swapFreeBytes", memoryDetails.swapFreeBytes);
         object.put("swapCachedBytes", memoryDetails.swapCachedBytes);
+        object.put("committedBytes", memoryDetails.committedBytes);
+        object.put("commitLimitBytes", memoryDetails.commitLimitBytes);
+        object.put("vmallocUsedBytes", memoryDetails.vmallocUsedBytes);
+        object.put("vmallocTotalBytes", memoryDetails.vmallocTotalBytes);
         return object;
     }
 
@@ -161,7 +165,7 @@ public final class MonitorStore {
     private MetricsSampler.MemoryDetails deserializeMemoryDetails(JSONObject object) {
         if (object == null) {
             return new MetricsSampler.MemoryDetails(
-                    0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L);
+                    0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L);
         }
         return new MetricsSampler.MemoryDetails(
                 object.optLong("totalBytes", 0L),
@@ -178,7 +182,11 @@ public final class MonitorStore {
                 object.optLong("shmemBytes", 0L),
                 object.optLong("swapTotalBytes", 0L),
                 object.optLong("swapFreeBytes", 0L),
-                object.optLong("swapCachedBytes", 0L));
+                object.optLong("swapCachedBytes", 0L),
+                object.optLong("committedBytes", 0L),
+                object.optLong("commitLimitBytes", 0L),
+                object.optLong("vmallocUsedBytes", 0L),
+                object.optLong("vmallocTotalBytes", 0L));
     }
 
     private JSONArray readArray(String raw) {

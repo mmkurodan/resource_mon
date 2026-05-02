@@ -166,6 +166,19 @@ public final class ProcessDetailsActivity extends Activity {
                     + " / "
                     + Formatter.formatShortFileSize(this, details.swapTotalBytes));
         }
+        if (details.commitLimitBytes > 0L) {
+            lines.add("Address space commit / limit: "
+                    + Formatter.formatShortFileSize(this, details.committedBytes)
+                    + " / "
+                    + Formatter.formatShortFileSize(this, details.commitLimitBytes)
+                    + " (" + formatPercent(details.committedPercent()) + ")");
+        }
+        if (details.vmallocTotalBytes > 0L) {
+            lines.add("Kernel vmap used / total: "
+                    + Formatter.formatShortFileSize(this, details.vmallocUsedBytes)
+                    + " / "
+                    + Formatter.formatShortFileSize(this, details.vmallocTotalBytes));
+        }
         return TextUtils.join("\n", lines);
     }
 
@@ -179,6 +192,7 @@ public final class ProcessDetailsActivity extends Activity {
                     + " (pid " + processEntry.pid + ", importance " + processEntry.importance + ")"
                     + "\nCPU: " + processEntry.cpuText
                     + " | Memory: " + processEntry.memoryText
+                    + "\nAddress space: " + processEntry.addressSpaceText
                     + "\nProcess: " + processEntry.processName
                     + "\nPackages: " + processEntry.packageSummary);
         }
