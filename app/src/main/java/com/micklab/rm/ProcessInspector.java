@@ -1,10 +1,17 @@
 package com.micklab.rm;
 
 import android.app.ActivityManager;
+import android.app.AppOpsManager;
+import android.app.usage.UsageStats;
+import android.app.usage.UsageStatsManager;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Debug;
+import android.os.Process;
+import android.provider.Settings;
 import android.text.TextUtils;
 
 import java.io.BufferedReader;
@@ -23,6 +30,7 @@ import java.util.Locale;
 import java.util.Map;
 
 public final class ProcessInspector {
+    private static final long RECENT_APP_WINDOW_MS = 30L * 60L * 1000L;
     private static final int IMPORTANCE_UNKNOWN = Integer.MAX_VALUE;
 
     public static final class ProcessEntry {
@@ -143,16 +151,40 @@ public final class ProcessInspector {
         }
     }
 
+    public static final class RecentAppEntry {
+        public final String label;
+        public final String packageName;
+        public final long lastTimeUsed;
+        public final long totalForegroundTimeMs;
+
+        RecentAppEntry(
+                String label,
+                String packageName,
+                long lastTimeUsed,
+                long totalForegroundTimeMs) {
+            this.label = label;
+            this.packageName = packageName;
+            this.lastTimeUsed = lastTimeUsed;
+            this.totalForegroundTimeMs = totalForegroundTimeMs;
+        }
+    }
+
     public static final class ProcessReport {
         public final String note;
+        public final boolean usageAccessGranted;
+        public final List<RecentAppEntry> recentApps;
         public final List<AppEntry> appEntries;
         public final List<ProcessEntry> processEntries;
 
         ProcessReport(
                 String note,
+                boolean usageAccessGranted,
+                List<RecentAppEntry> recentApps,
                 List<AppEntry> appEntries,
                 List<ProcessEntry> processEntries) {
             this.note = note;
+            this.usageAccessGranted = usageAccessGranted;
+            this.recentApps = recentApps;
             this.appEntries = appEntries;
             this.processEntries = processEntries;
         }
@@ -284,6 +316,7 @@ public final class ProcessInspector {
 
     private final Context context;
     private final ActivityManager activityManager;
+    private final UsageStatsManager usageStatsManager;
     private final PackageManager packageManager;
     private final Map<Integer, ProcessCpuSample> previousProcessSamples = new HashMap<>();
     private final Map<String, String> labelCache = new HashMap<>();
@@ -296,12 +329,18 @@ public final class ProcessInspector {
         this.context = context.getApplicationContext();
         this.activityManager =
                 (ActivityManager) this.context.getSystemService(Context.ACTIVITY_SERVICE);
+        this.usageStatsManager =
+                (UsageStatsManager) this.context.getSystemService(Context.USAGE_STATS_SERVICE);
         this.packageManager = this.context.getPackageManager();
     }
 
     public ProcessReport collect() {
         List<ProcessEntry> processEntries = collectRunningProcesses();
         List<AppEntry> appEntries = collectRunningApps(processEntries);
+        boolean usageAccessGranted = hasUsageAccess();
+        List<RecentAppEntry> recentApps = usageAccessGranted
+                ? collectRecentApps()
+                : Collections.<RecentAppEntry>emptyList();
         int importanceCount = 0;
         for (ProcessEntry processEntry : processEntries) {
             if (processEntry.hasImportance()) {
@@ -309,9 +348,15 @@ public final class ProcessInspector {
             }
         }
         return new ProcessReport(
-                buildAccessNote(processEntries, appEntries, importanceCount),
+                buildAccessNote(processEntries, appEntries, importanceCount, usageAccessGranted),
+                usageAccessGranted,
+                recentApps,
                 appEntries,
                 processEntries);
+    }
+
+    public Intent buildUsageAccessIntent() {
+        return new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS);
     }
 
     public List<ProcessEntry> collectRunningProcessesSnapshot() {
@@ -321,25 +366,31 @@ public final class ProcessInspector {
     private String buildAccessNote(
             List<ProcessEntry> processEntries,
             List<AppEntry> appEntries,
-            int importanceCount) {
+            int importanceCount,
+            boolean usageAccessGranted) {
         StringBuilder noteBuilder = new StringBuilder();
         noteBuilder.append("Enumerated ")
                 .append(processEntries.size())
-                .append(" visible PID(s) from /proc and grouped them into ")
+                .append(" process entry(ies) and grouped them into ")
                 .append(appEntries.size())
-                .append(" running app entry(ies).");
+                .append(" running app entry(ies) using ActivityManager with procfs enrichment when readable.");
         if (importanceCount > 0) {
-            noteBuilder.append("\nActivityManager still exposed Android importance for ")
+            noteBuilder.append("\nActivityManager exposed Android importance for ")
                     .append(importanceCount)
-                    .append(" process(es), so foreground/service state is shown when available.");
+                    .append(" process(es), so foreground/background state is shown when available.");
         } else {
-            noteBuilder.append("\nAndroid importance was unavailable for every visible PID, so state falls back to procfs/Linux metadata.");
+            noteBuilder.append("\nAndroid importance was unavailable for every running process, so state falls back to procfs/Linux metadata when possible.");
         }
         noteBuilder.append("\nCPU deltas, PSS, and cross-app memory remain best-effort on Android; newer releases may hide some live stats unless the device is rooted or the app has privileged access.");
+        if (usageAccessGranted) {
+            noteBuilder.append("\nUsage access is enabled, so recent foreground apps are listed below for correlation with the live process view.");
+        } else {
+            noteBuilder.append("\nUsage access is off, so recent foreground apps cannot be shown until you open the system usage-access settings.");
+        }
         if (processEntries.isEmpty()) {
-            noteBuilder.append("\nNo readable numeric /proc entries were visible to this app.");
+            noteBuilder.append("\nNo running processes were exposed to this app.");
         } else if (processEntries.size() == 1) {
-            noteBuilder.append("\nOnly one readable process was visible; this often means the device is enforcing tight procfs isolation.");
+            noteBuilder.append("\nOnly one process was visible; this often means the device is enforcing tight process isolation.");
         }
         return noteBuilder.toString();
     }
@@ -347,35 +398,66 @@ public final class ProcessInspector {
     private List<ProcessEntry> collectRunningProcesses() {
         Map<Integer, ActivityManager.RunningAppProcessInfo> runningProcessesByPid = getRunningProcessesByPid();
         List<VisibleProcessSample> visibleProcesses = enumerateVisibleProcesses(runningProcessesByPid);
-        if (visibleProcesses.isEmpty()) {
+        Map<Integer, VisibleProcessSample> visibleProcessesByPid = new HashMap<>();
+        for (VisibleProcessSample visibleProcess : visibleProcesses) {
+            visibleProcessesByPid.put(Integer.valueOf(visibleProcess.pid), visibleProcess);
+        }
+
+        List<Integer> allPids = new ArrayList<>(runningProcessesByPid.keySet());
+        for (VisibleProcessSample visibleProcess : visibleProcesses) {
+            Integer pid = Integer.valueOf(visibleProcess.pid);
+            if (!runningProcessesByPid.containsKey(pid)) {
+                allPids.add(pid);
+            }
+        }
+
+        if (allPids.isEmpty()) {
             previousCpuTotals = readCpuTotals();
             previousProcessSamples.clear();
             return Collections.emptyList();
         }
 
         CpuTotals totalCpu = readCpuTotals();
-        Map<Integer, Long> pssByPid = readPssKilobytes(visibleProcesses);
+        Map<Integer, Long> pssByPid = readPssKilobytes(allPids);
         List<ProcessEntry> entries = new ArrayList<>();
         Map<Integer, ProcessCpuSample> currentProcessSamples = new HashMap<>();
 
-        for (VisibleProcessSample processSample : visibleProcesses) {
-            if (processSample.cpuSample != null) {
-                currentProcessSamples.put(processSample.pid, processSample.cpuSample);
+        for (Integer pidValue : allPids) {
+            if (pidValue == null) {
+                continue;
+            }
+            int pid = pidValue.intValue();
+            VisibleProcessSample visibleProcess = visibleProcessesByPid.get(pidValue);
+            ActivityManager.RunningAppProcessInfo processInfo = runningProcessesByPid.get(pidValue);
+            ProcStatusSample statusSample = visibleProcess == null
+                    ? readProcessStatus(pid)
+                    : visibleProcess.statusSample;
+            ProcessCpuSample cpuSample = visibleProcess == null
+                    ? readProcessCpuSample(pid)
+                    : visibleProcess.cpuSample;
+            if (cpuSample != null) {
+                currentProcessSamples.put(pidValue, cpuSample);
             }
 
-            long pssKb = pssByPid.containsKey(processSample.pid)
-                    ? Math.max(0L, pssByPid.get(processSample.pid).longValue())
+            int uid = resolveUid(processInfo, statusSample);
+            int importance = processInfo == null ? IMPORTANCE_UNKNOWN : processInfo.importance;
+            boolean foregroundLike = processInfo != null && isForegroundLike(importance);
+            String processName = resolveProcessName(processInfo, statusSample, cpuSample, pid);
+            String[] packageNames = resolvePackageNames(processInfo, uid, processName);
+
+            long pssKb = pssByPid.containsKey(pidValue)
+                    ? Math.max(0L, pssByPid.get(pidValue).longValue())
                     : 0L;
-            long rssKb = processSample.statusSample == null ? 0L : processSample.statusSample.rssKb;
+            long rssKb = statusSample == null ? 0L : statusSample.rssKb;
             long memoryKb = pssKb > 0L ? pssKb : rssKb;
             String memoryText = formatMemoryText(pssKb, rssKb);
 
             double cpuPercent = Double.NaN;
             String cpuText = "Unavailable";
-            if (totalCpu != null && previousCpuTotals != null && processSample.cpuSample != null) {
-                ProcessCpuSample baseline = previousProcessSamples.get(processSample.pid);
+            if (totalCpu != null && previousCpuTotals != null && cpuSample != null) {
+                ProcessCpuSample baseline = previousProcessSamples.get(pidValue);
                 if (baseline != null) {
-                    long processDelta = processSample.cpuSample.totalTicks - baseline.totalTicks;
+                    long processDelta = cpuSample.totalTicks - baseline.totalTicks;
                     long totalDelta = totalCpu.total - previousCpuTotals.total;
                     if (processDelta >= 0L && totalDelta > 0L) {
                         cpuPercent = Math.max(0d, (processDelta * 100.0d) / totalDelta);
@@ -388,25 +470,25 @@ public final class ProcessInspector {
                 }
             }
 
-            long currentVmKb = processSample.statusSample == null ? 0L : processSample.statusSample.currentVmKb;
-            long peakVmKb = processSample.statusSample == null ? 0L : processSample.statusSample.peakVmKb;
-            long swapKb = processSample.statusSample == null ? 0L : processSample.statusSample.swapKb;
-            int threadCount = processSample.statusSample == null ? 0 : processSample.statusSample.threadCount;
-            String linuxStateText = processSample.statusSample == null
+            long currentVmKb = statusSample == null ? 0L : statusSample.currentVmKb;
+            long peakVmKb = statusSample == null ? 0L : statusSample.peakVmKb;
+            long swapKb = statusSample == null ? 0L : statusSample.swapKb;
+            int threadCount = statusSample == null ? 0 : statusSample.threadCount;
+            String linuxStateText = statusSample == null
                     ? "Unavailable"
-                    : nonEmptyOrFallback(processSample.statusSample.stateText, "Unavailable");
-            String packageSummary = processSample.packageNames.length == 0
-                    ? processSample.processName
-                    : TextUtils.join(", ", processSample.packageNames);
+                    : nonEmptyOrFallback(statusSample.stateText, "Unavailable");
+            String packageSummary = packageNames.length == 0
+                    ? processName
+                    : TextUtils.join(", ", packageNames);
 
             entries.add(new ProcessEntry(
-                    resolveLabel(processSample.packageNames, processSample.processName, processSample.uid),
-                    processSample.processName,
-                    processSample.pid,
-                    processSample.uid,
-                    processSample.importance,
-                    processSample.foregroundLike,
-                    describeProcessState(processSample.importance, processSample.statusSample),
+                    resolveLabel(packageNames, processName, uid),
+                    processName,
+                    pid,
+                    uid,
+                    importance,
+                    foregroundLike,
+                    describeProcessState(importance, statusSample),
                     linuxStateText,
                     memoryText,
                     cpuText,
@@ -425,6 +507,82 @@ public final class ProcessInspector {
         previousProcessSamples.putAll(currentProcessSamples);
         sortProcessEntries(entries);
         return entries;
+    }
+
+    private List<RecentAppEntry> collectRecentApps() {
+        if (usageStatsManager == null) {
+            return Collections.emptyList();
+        }
+        long endTime = System.currentTimeMillis();
+        long startTime = endTime - RECENT_APP_WINDOW_MS;
+        List<UsageStats> usageStats = usageStatsManager.queryUsageStats(
+                UsageStatsManager.INTERVAL_DAILY,
+                startTime,
+                endTime);
+        if (usageStats == null || usageStats.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        Map<String, RecentAppEntry> recentAppsByPackage = new HashMap<>();
+        for (UsageStats usageStat : usageStats) {
+            if (usageStat == null || usageStat.getLastTimeUsed() <= 0L) {
+                continue;
+            }
+            String packageName = usageStat.getPackageName();
+            if (TextUtils.isEmpty(packageName)) {
+                continue;
+            }
+            RecentAppEntry current = recentAppsByPackage.get(packageName);
+            if (current != null && current.lastTimeUsed >= usageStat.getLastTimeUsed()) {
+                continue;
+            }
+            recentAppsByPackage.put(packageName, new RecentAppEntry(
+                    resolveLabel(packageName, packageName),
+                    packageName,
+                    usageStat.getLastTimeUsed(),
+                    usageStat.getTotalTimeInForeground()));
+        }
+
+        List<RecentAppEntry> recentApps = new ArrayList<>(recentAppsByPackage.values());
+        Collections.sort(recentApps, new Comparator<RecentAppEntry>() {
+            @Override
+            public int compare(RecentAppEntry left, RecentAppEntry right) {
+                return Long.compare(right.lastTimeUsed, left.lastTimeUsed);
+            }
+        });
+        if (recentApps.size() > 10) {
+            return new ArrayList<>(recentApps.subList(0, 10));
+        }
+        return recentApps;
+    }
+
+    private boolean hasUsageAccess() {
+        if (usageStatsManager == null) {
+            return false;
+        }
+        AppOpsManager appOpsManager =
+                (AppOpsManager) context.getSystemService(Context.APP_OPS_SERVICE);
+        if (appOpsManager != null) {
+            int mode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                    ? appOpsManager.unsafeCheckOpNoThrow(
+                    AppOpsManager.OPSTR_GET_USAGE_STATS,
+                    Process.myUid(),
+                    context.getPackageName())
+                    : appOpsManager.checkOpNoThrow(
+                    AppOpsManager.OPSTR_GET_USAGE_STATS,
+                    Process.myUid(),
+                    context.getPackageName());
+            if (mode == AppOpsManager.MODE_ALLOWED) {
+                return true;
+            }
+        }
+
+        long endTime = System.currentTimeMillis();
+        List<UsageStats> usageStats = usageStatsManager.queryUsageStats(
+                UsageStatsManager.INTERVAL_DAILY,
+                endTime - 5L * 60L * 1000L,
+                endTime);
+        return usageStats != null && !usageStats.isEmpty();
     }
 
     private List<AppEntry> collectRunningApps(List<ProcessEntry> processEntries) {
@@ -538,14 +696,14 @@ public final class ProcessInspector {
         return visibleProcesses;
     }
 
-    private Map<Integer, Long> readPssKilobytes(List<VisibleProcessSample> visibleProcesses) {
-        if (activityManager == null || visibleProcesses.isEmpty()) {
+    private Map<Integer, Long> readPssKilobytes(List<Integer> pidsToInspect) {
+        if (activityManager == null || pidsToInspect.isEmpty()) {
             return Collections.emptyMap();
         }
 
-        int[] pids = new int[visibleProcesses.size()];
-        for (int index = 0; index < visibleProcesses.size(); index++) {
-            pids[index] = visibleProcesses.get(index).pid;
+        int[] pids = new int[pidsToInspect.size()];
+        for (int index = 0; index < pidsToInspect.size(); index++) {
+            pids[index] = pidsToInspect.get(index).intValue();
         }
 
         Map<Integer, Long> pssByPid = new HashMap<>();
@@ -569,6 +727,45 @@ public final class ProcessInspector {
             return pssByPid;
         }
         return pssByPid;
+    }
+
+    private int resolveUid(
+            ActivityManager.RunningAppProcessInfo processInfo,
+            ProcStatusSample statusSample) {
+        if (statusSample != null && statusSample.uid >= 0) {
+            return statusSample.uid;
+        }
+        if (processInfo != null && processInfo.uid >= 0) {
+            return processInfo.uid;
+        }
+        if (processInfo != null && processInfo.pkgList != null) {
+            for (String packageName : processInfo.pkgList) {
+                if (TextUtils.isEmpty(packageName)) {
+                    continue;
+                }
+                try {
+                    return packageManager.getApplicationInfo(packageName, 0).uid;
+                } catch (PackageManager.NameNotFoundException ignored) {
+                    // Try the next package name.
+                }
+            }
+        }
+        return -1;
+    }
+
+    private String resolveProcessName(
+            ActivityManager.RunningAppProcessInfo processInfo,
+            ProcStatusSample statusSample,
+            ProcessCpuSample cpuSample,
+            int pid) {
+        if (processInfo != null && !TextUtils.isEmpty(processInfo.processName)) {
+            return processInfo.processName;
+        }
+        String processName = readProcessName(pid, statusSample, cpuSample);
+        if (!TextUtils.isEmpty(processName)) {
+            return processName;
+        }
+        return "pid " + pid;
     }
 
     private String[] resolvePackageNames(

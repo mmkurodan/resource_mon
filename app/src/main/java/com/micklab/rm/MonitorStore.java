@@ -145,7 +145,7 @@ public final class MonitorStore {
             for (int index = 0; index < history.length(); index++) {
                 ForegroundProcessStats stats = deserializeForegroundProcessStats(history.optJSONObject(index));
                 if (stats != null) {
-                    statsByProcess.put(stats.processName, stats);
+                    statsByProcess.put(buildForegroundStatsKey(stats.processName, stats.packageSummary), stats);
                 }
             }
 
@@ -153,7 +153,10 @@ public final class MonitorStore {
                 if (processEntry == null || !processEntry.foregroundLike) {
                     continue;
                 }
-                ForegroundProcessStats current = statsByProcess.get(processEntry.processName);
+                String statsKey = buildForegroundStatsKey(
+                        processEntry.processName,
+                        processEntry.packageSummary);
+                ForegroundProcessStats current = statsByProcess.get(statsKey);
                 int nextSampleCount = current == null ? 1 : current.sampleCount + 1;
                 int nextCpuSampleCount = current == null ? 0 : current.cpuSampleCount;
                 int nextMemorySampleCount = current == null ? 0 : current.memorySampleCount;
@@ -169,7 +172,7 @@ public final class MonitorStore {
                     nextMemorySampleCount += 1;
                 }
 
-                statsByProcess.put(processEntry.processName, new ForegroundProcessStats(
+                statsByProcess.put(statsKey, new ForegroundProcessStats(
                         processEntry.label,
                         processEntry.processName,
                         processEntry.packageSummary,
@@ -220,6 +223,12 @@ public final class MonitorStore {
             }
             return stats;
         }
+    }
+
+    private String buildForegroundStatsKey(String processName, String packageSummary) {
+        String resolvedProcessName = processName == null ? "" : processName.trim();
+        String resolvedPackageSummary = packageSummary == null ? "" : packageSummary.trim();
+        return resolvedPackageSummary + "|" + resolvedProcessName;
     }
 
     private JSONObject serializeSnapshot(MetricsSampler.MetricsSnapshot snapshot) {

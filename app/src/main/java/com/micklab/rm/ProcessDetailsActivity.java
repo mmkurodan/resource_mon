@@ -1,6 +1,7 @@
 package com.micklab.rm;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -12,6 +13,7 @@ import android.util.TypedValue;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
+import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -35,8 +37,12 @@ public final class ProcessDetailsActivity extends Activity {
     private TextView summaryView;
     private TextView memoryDetailView;
     private TextView processNoteView;
-    private TextView appListView;
-    private TextView processListView;
+    private Button usageAccessButton;
+    private TextView foregroundAppListView;
+    private TextView backgroundAppListView;
+    private TextView foregroundProcessListView;
+    private TextView backgroundProcessListView;
+    private TextView recentAppsView;
     private TextView foregroundHistoryView;
 
     @Override
@@ -96,27 +102,58 @@ public final class ProcessDetailsActivity extends Activity {
         summaryView = addSection(container, "Status");
         memoryDetailView = addSection(container, "Detailed RAM");
         processNoteView = addSection(container, "Access note");
-        appListView = addSection(container, "Running applications (/proc + ActivityManager)");
-        processListView = addSection(container, "Running processes (/proc scan)");
+
+        usageAccessButton = new Button(this);
+        usageAccessButton.setText("Open usage access settings");
+        usageAccessButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                startActivity(new Intent(processInspector.buildUsageAccessIntent()));
+            }
+        });
+        LinearLayout.LayoutParams buttonParams = matchParentLayoutParams();
+        buttonParams.topMargin = dp(8);
+        container.addView(usageAccessButton, buttonParams);
+
+        foregroundAppListView = addSection(container, "Real-time foreground apps");
+        backgroundAppListView = addSection(container, "Real-time background apps");
+        foregroundProcessListView = addSection(container, "Real-time foreground processes");
+        backgroundProcessListView = addSection(container, "Real-time background processes");
+        recentAppsView = addSection(container, "Recent foreground apps (usage access)");
         foregroundHistoryView = addSection(container, "Foreground process history");
         return scrollView;
     }
 
     private void refreshContent() {
         MetricsSampler.MetricsSnapshot latestSample = monitorStore.getLatestSample();
-        summaryView.setText(buildSummaryText(latestSample));
         memoryDetailView.setText(buildMemoryDetailText(latestSample));
 
         ProcessInspector.ProcessReport report = processInspector.collect();
         processNoteView.setText(report.note);
-        appListView.setText(buildAppListText(report.appEntries));
-        processListView.setText(buildProcessListText(report.processEntries));
+        summaryView.setText(buildSummaryText(latestSample, report));
+        updateUsageAccessButton(report.usageAccessGranted);
+        foregroundAppListView.setText(buildAppListText(
+                filterForegroundApps(report.appEntries, true),
+                "No foreground app CPU/RAM usage is visible right now."));
+        backgroundAppListView.setText(buildAppListText(
+                filterForegroundApps(report.appEntries, false),
+                "No background app CPU/RAM usage is visible right now."));
+        foregroundProcessListView.setText(buildProcessListText(
+                filterForegroundProcesses(report.processEntries, true),
+                "No foreground process CPU/RAM usage is visible right now."));
+        backgroundProcessListView.setText(buildProcessListText(
+                filterForegroundProcesses(report.processEntries, false),
+                "No background process CPU/RAM usage is visible right now."));
+        recentAppsView.setText(buildRecentAppsText(report.recentApps, report.appEntries));
         foregroundHistoryView.setText(buildForegroundHistoryText(monitorStore.getForegroundProcessHistory()));
     }
 
-    private String buildSummaryText(MetricsSampler.MetricsSnapshot latestSample) {
+    private String buildSummaryText(
+            MetricsSampler.MetricsSnapshot latestSample,
+            ProcessInspector.ProcessReport report) {
         if (latestSample == null) {
-            return "No recorded samples yet.";
+            return "No recorded samples yet."
+                    + "\nUsage access: " + (report.usageAccessGranted ? "ON" : "OFF");
         }
         return "Background recording: " + (monitorStore.isMonitoringEnabled() ? "ON" : "OFF")
                 + "\nLast sample: " + DateUtils.getRelativeTimeSpanString(
@@ -124,7 +161,10 @@ public final class ProcessDetailsActivity extends Activity {
                         System.currentTimeMillis(),
                         DateUtils.SECOND_IN_MILLIS)
                 + "\nCPU: " + formatPercent(latestSample.cpuUsagePercent)
-                + " | RAM: " + formatPercent(latestSample.ramUsagePercent());
+                + " | RAM: " + formatPercent(latestSample.ramUsagePercent())
+                + "\nUsage access: " + (report.usageAccessGranted ? "ON" : "OFF")
+                + " | Foreground apps: " + filterForegroundApps(report.appEntries, true).size()
+                + " | Background apps: " + filterForegroundApps(report.appEntries, false).size();
     }
 
     private String buildMemoryDetailText(MetricsSampler.MetricsSnapshot latestSample) {
@@ -168,9 +208,11 @@ public final class ProcessDetailsActivity extends Activity {
         return TextUtils.join("\n", lines);
     }
 
-    private String buildProcessListText(List<ProcessInspector.ProcessEntry> processEntries) {
+    private String buildProcessListText(
+            List<ProcessInspector.ProcessEntry> processEntries,
+            String emptyMessage) {
         if (processEntries == null || processEntries.isEmpty()) {
-            return "No process information was visible via /proc.";
+            return emptyMessage;
         }
         List<String> lines = new ArrayList<>();
         for (ProcessInspector.ProcessEntry processEntry : processEntries) {
@@ -193,9 +235,11 @@ public final class ProcessDetailsActivity extends Activity {
         return TextUtils.join("\n\n", lines);
     }
 
-    private String buildAppListText(List<ProcessInspector.AppEntry> appEntries) {
+    private String buildAppListText(
+            List<ProcessInspector.AppEntry> appEntries,
+            String emptyMessage) {
         if (appEntries == null || appEntries.isEmpty()) {
-            return "No running application aggregates were visible via /proc.";
+            return emptyMessage;
         }
         List<String> lines = new ArrayList<>();
         for (ProcessInspector.AppEntry appEntry : appEntries) {
@@ -211,6 +255,35 @@ public final class ProcessDetailsActivity extends Activity {
                     .append(" | Memory: ").append(appEntry.memoryText);
             builder.append("\nAddress space: ").append(appEntry.addressSpaceText);
             builder.append("\nPackages: ").append(appEntry.packageSummary);
+            lines.add(builder.toString());
+        }
+        return TextUtils.join("\n\n", lines);
+    }
+
+    private String buildRecentAppsText(
+            List<ProcessInspector.RecentAppEntry> recentApps,
+            List<ProcessInspector.AppEntry> liveAppEntries) {
+        if (recentApps == null || recentApps.isEmpty()) {
+            return "Grant usage access to list recently foregrounded apps here.";
+        }
+        List<String> lines = new ArrayList<>();
+        for (ProcessInspector.RecentAppEntry recentApp : recentApps) {
+            StringBuilder builder = new StringBuilder();
+            builder.append(recentApp.label)
+                    .append("\nPackage: ").append(recentApp.packageName)
+                    .append("\nLast used: ").append(DateUtils.getRelativeTimeSpanString(
+                            recentApp.lastTimeUsed,
+                            System.currentTimeMillis(),
+                            DateUtils.MINUTE_IN_MILLIS))
+                    .append(" | Foreground time: ")
+                    .append(DateUtils.formatElapsedTime(recentApp.totalForegroundTimeMs / 1000L));
+
+            ProcessInspector.AppEntry liveApp = findLiveAppEntry(recentApp.packageName, liveAppEntries);
+            if (liveApp != null) {
+                builder.append("\nLive state: ").append(liveApp.stateText)
+                        .append("\nLive CPU: ").append(liveApp.cpuText)
+                        .append(" | Live memory: ").append(liveApp.memoryText);
+            }
             lines.add(builder.toString());
         }
         return TextUtils.join("\n\n", lines);
@@ -240,6 +313,64 @@ public final class ProcessDetailsActivity extends Activity {
                     + "\nPackages: " + stats.packageSummary);
         }
         return TextUtils.join("\n\n", lines);
+    }
+
+    private void updateUsageAccessButton(boolean usageAccessGranted) {
+        usageAccessButton.setEnabled(!usageAccessGranted);
+        usageAccessButton.setText(
+                usageAccessGranted
+                        ? "Usage access enabled"
+                        : "Open usage access settings");
+    }
+
+    private List<ProcessInspector.AppEntry> filterForegroundApps(
+            List<ProcessInspector.AppEntry> appEntries,
+            boolean foregroundLike) {
+        List<ProcessInspector.AppEntry> filtered = new ArrayList<>();
+        if (appEntries == null) {
+            return filtered;
+        }
+        for (ProcessInspector.AppEntry appEntry : appEntries) {
+            if (appEntry != null && appEntry.foregroundLike == foregroundLike) {
+                filtered.add(appEntry);
+            }
+        }
+        return filtered;
+    }
+
+    private List<ProcessInspector.ProcessEntry> filterForegroundProcesses(
+            List<ProcessInspector.ProcessEntry> processEntries,
+            boolean foregroundLike) {
+        List<ProcessInspector.ProcessEntry> filtered = new ArrayList<>();
+        if (processEntries == null) {
+            return filtered;
+        }
+        for (ProcessInspector.ProcessEntry processEntry : processEntries) {
+            if (processEntry != null && processEntry.foregroundLike == foregroundLike) {
+                filtered.add(processEntry);
+            }
+        }
+        return filtered;
+    }
+
+    private ProcessInspector.AppEntry findLiveAppEntry(
+            String packageName,
+            List<ProcessInspector.AppEntry> liveAppEntries) {
+        if (TextUtils.isEmpty(packageName) || liveAppEntries == null) {
+            return null;
+        }
+        for (ProcessInspector.AppEntry appEntry : liveAppEntries) {
+            if (appEntry == null || TextUtils.isEmpty(appEntry.packageSummary)) {
+                continue;
+            }
+            String[] packageNames = appEntry.packageSummary.split("\\s*,\\s*");
+            for (String candidate : packageNames) {
+                if (packageName.equals(candidate)) {
+                    return appEntry;
+                }
+            }
+        }
+        return null;
     }
 
     private TextView addSection(LinearLayout parent, String title) {
