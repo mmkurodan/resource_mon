@@ -3,19 +3,23 @@ set -euo pipefail
 
 # Android test runner:
 # - pre-AAPT2 checks: Java compilation
-# - AAPT2+ checks: resources, APK assemble, unit tests
+# - AAPT2+ checks: resources, artifact build, unit tests
 # Usage:
-#   ./test-before-aapt2.sh [module] [--pre-only|--from-aapt2|--full] [--clean]
+#   ./test-before-aapt2.sh [module] [--pre-only|--from-aapt2|--full] [--apk-debug|--apk-release|--aab-debug|--aab-release] [--clean]
 
 usage() {
   cat <<'EOF'
-Usage: ./test-before-aapt2.sh [module] [--pre-only|--from-aapt2|--full] [--clean]
-  module        Android module name (default: app)
-  --pre-only    Run only pre-AAPT2 compile tasks
-  --from-aapt2  Run AAPT2 and later tasks (resource processing, APK build, tests)
-  --full        Run both pre-AAPT2 and AAPT2+ tasks (default)
-  --clean       Force-remove build artifacts and generated local.properties at exit
-  note          On successful APK build, APK is copied to ~/downloads and intermediates are cleaned
+Usage: ./test-before-aapt2.sh [module] [--pre-only|--from-aapt2|--full] [--apk-debug|--apk-release|--aab-debug|--aab-release] [--clean]
+  module         Android module name (default: app)
+  --pre-only     Run only pre-AAPT2 compile tasks
+  --from-aapt2   Run AAPT2 and later tasks (resource processing, artifact build, tests)
+  --full         Run both pre-AAPT2 and AAPT2+ tasks (default)
+  --apk-debug    Build debug APK (default)
+  --apk-release  Build release APK (requires signing)
+  --aab-debug    Build debug AAB
+  --aab-release  Build release AAB (requires signing)
+  --clean        Force-remove build artifacts and generated local.properties at exit
+  note           On successful artifact build, it is copied to ~/downloads and intermediates are cleaned
 EOF
 }
 
@@ -24,6 +28,8 @@ cd "$REPO_ROOT"
 
 MODULE="app"
 MODE="full"
+ARTIFACT_KIND="apk"
+ARTIFACT_VARIANT="debug"
 CLEAN_ON_EXIT=0
 
 while [ $# -gt 0 ]; do
@@ -36,6 +42,22 @@ while [ $# -gt 0 ]; do
       ;;
     --full)
       MODE="full"
+      ;;
+    --apk-debug)
+      ARTIFACT_KIND="apk"
+      ARTIFACT_VARIANT="debug"
+      ;;
+    --apk-release)
+      ARTIFACT_KIND="apk"
+      ARTIFACT_VARIANT="release"
+      ;;
+    --aab-debug)
+      ARTIFACT_KIND="aab"
+      ARTIFACT_VARIANT="debug"
+      ;;
+    --aab-release)
+      ARTIFACT_KIND="aab"
+      ARTIFACT_VARIANT="release"
       ;;
     --clean)
       CLEAN_ON_EXIT=1
@@ -91,13 +113,14 @@ if [ -z "${GRADLE_RUNNER:-}" ]; then
   exit 127
 fi
 echo "Gradle runner: $GRADLE_RUNNER"
+echo "Artifact: $ARTIFACT_KIND/$ARTIFACT_VARIANT"
 
 GENERATED_LOCAL_PROPERTIES=0
 if [ -n "${ANDROID_SDK_ROOT:-}" ] && [ -d "${ANDROID_SDK_ROOT:-}" ] && [ ! -f "$REPO_ROOT/local.properties" ]; then
   printf 'sdk.dir=%s\n' "$ANDROID_SDK_ROOT" > "$REPO_ROOT/local.properties"
   GENERATED_LOCAL_PROPERTIES=1
 fi
-APK_COPIED=0
+ARTIFACT_COPIED=0
 
 resolve_aapt2_bin() {
   if [ -n "${AAPT2_BIN:-}" ] && [ -x "$AAPT2_BIN" ]; then
@@ -157,6 +180,39 @@ else
   echo "AAPT2 override unavailable; using AGP default AAPT2."
 fi
 
+ARTIFACT_TASK=":$MODULE:assembleDebug"
+ARTIFACT_DIR="$REPO_ROOT/$MODULE/build/outputs/apk/debug"
+ARTIFACT_PATTERN="*.apk"
+ARTIFACT_LABEL="APK"
+RESOURCE_TASK=":$MODULE:processDebugResources"
+
+case "$ARTIFACT_KIND:$ARTIFACT_VARIANT" in
+  apk:debug)
+    ;;
+  apk:release)
+    ARTIFACT_TASK=":$MODULE:assembleRelease"
+    ARTIFACT_DIR="$REPO_ROOT/$MODULE/build/outputs/apk/release"
+    RESOURCE_TASK=":$MODULE:processReleaseResources"
+    ;;
+  aab:debug)
+    ARTIFACT_TASK=":$MODULE:bundleDebug"
+    ARTIFACT_DIR="$REPO_ROOT/$MODULE/build/outputs/bundle/debug"
+    ARTIFACT_PATTERN="*.aab"
+    ARTIFACT_LABEL="AAB"
+    ;;
+  aab:release)
+    ARTIFACT_TASK=":$MODULE:bundleRelease"
+    ARTIFACT_DIR="$REPO_ROOT/$MODULE/build/outputs/bundle/release"
+    ARTIFACT_PATTERN="*.aab"
+    ARTIFACT_LABEL="AAB"
+    RESOURCE_TASK=":$MODULE:processReleaseResources"
+    ;;
+  *)
+    echo "Unsupported artifact selection: $ARTIFACT_KIND/$ARTIFACT_VARIANT" >&2
+    exit 2
+    ;;
+esac
+
 if [ "$MODE" = "pre" ] || [ "$MODE" = "full" ]; then
   if run_gradle_tasks "$LOG_DIR/pre-aapt2.log" \
       ":$MODULE:compileDebugJavaWithJavac" \
@@ -169,8 +225,8 @@ fi
 
 if [ "$MODE" = "post" ] || [ "$MODE" = "full" ]; then
   if run_gradle_tasks "$LOG_DIR/aapt2-plus.log" \
-      ":$MODULE:processDebugResources" \
-      ":$MODULE:assembleDebug" \
+      "$RESOURCE_TASK" \
+      "$ARTIFACT_TASK" \
       ":$MODULE:testDebugUnitTest"; then
     :
   else
@@ -178,23 +234,22 @@ if [ "$MODE" = "post" ] || [ "$MODE" = "full" ]; then
   fi
 fi
 
-APK_GLOB="$REPO_ROOT/$MODULE/build/outputs/apk/debug"
-APK_PATH="$(find "$APK_GLOB" -maxdepth 1 -type f -name '*.apk' 2>/dev/null | sort | tail -n 1 || true)"
-if [ "$RC" -eq 0 ] && [ -n "$APK_PATH" ]; then
-  echo "APK: $APK_PATH"
+ARTIFACT_PATH="$(find "$ARTIFACT_DIR" -maxdepth 1 -type f -name "$ARTIFACT_PATTERN" 2>/dev/null | sort | tail -n 1 || true)"
+if [ "$RC" -eq 0 ] && [ -n "$ARTIFACT_PATH" ]; then
+  echo "$ARTIFACT_LABEL: $ARTIFACT_PATH"
   mkdir -p "$DOWNLOADS_DIR"
-  APK_DEST="$DOWNLOADS_DIR/$(basename "$APK_PATH")"
-  cp -f "$APK_PATH" "$APK_DEST"
-  APK_COPIED=1
-  echo "APK copied to: $APK_DEST"
+  ARTIFACT_DEST="$DOWNLOADS_DIR/$(basename "$ARTIFACT_PATH")"
+  cp -f "$ARTIFACT_PATH" "$ARTIFACT_DEST"
+  ARTIFACT_COPIED=1
+  echo "$ARTIFACT_LABEL copied to: $ARTIFACT_DEST"
 elif [ "$RC" -ne 0 ]; then
-  echo "Skipping APK copy because Gradle tasks failed."
+  echo "Skipping artifact copy because Gradle tasks failed."
 else
-  echo "APK not found under: $APK_GLOB"
+  echo "$ARTIFACT_LABEL not found under: $ARTIFACT_DIR"
 fi
 
 cleanup() {
-  if [ "$CLEAN_ON_EXIT" -ne 1 ] && [ "$APK_COPIED" -ne 1 ]; then
+  if [ "$CLEAN_ON_EXIT" -ne 1 ] && [ "$ARTIFACT_COPIED" -ne 1 ]; then
     return
   fi
   echo "Cleaning build artifacts..."
