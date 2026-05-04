@@ -3,11 +3,11 @@ plugins {
 }
 
 android {
-    namespace "com.micklab.resource_mon"
+    namespace "com.micklab.rm"
     compileSdk 35
 
     defaultConfig {
-        applicationId "com.micklab.resource_mon"
+        applicationId "com.micklab.rm"
         minSdk 24
         targetSdk 35
         versionCode 1

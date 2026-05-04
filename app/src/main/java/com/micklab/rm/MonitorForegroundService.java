@@ -1,4 +1,4 @@
-package com.micklab.resource_mon;
+package com.micklab.rm;
 
 import android.app.Notification;
 import android.app.Notification.Action;
@@ -16,8 +16,8 @@ import android.text.format.Formatter;
 public final class MonitorForegroundService extends Service {
     private static final String CHANNEL_ID = "monitoring";
     private static final int NOTIFICATION_ID = 1001;
-    private static final String ACTION_START = "com.micklab.resource_mon.action.START";
-    private static final String ACTION_STOP = "com.micklab.resource_mon.action.STOP";
+    private static final String ACTION_START = "com.micklab.rm.action.START";
+    private static final String ACTION_STOP = "com.micklab.rm.action.STOP";
 
     public static void start(Context context) {
         Intent intent = new Intent(context, MonitorForegroundService.class);

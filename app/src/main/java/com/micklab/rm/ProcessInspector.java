@@ -1,4 +1,4 @@
-package com.micklab.resource_mon;
+package com.micklab.rm;
 
 import android.app.ActivityManager;
 import android.app.usage.UsageStats;
