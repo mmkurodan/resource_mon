@@ -41,11 +41,15 @@ public final class MonitorForegroundService extends Service {
 
     private MetricsSampler sampler;
     private MonitorStore monitorStore;
+    private ProcessInspector processInspector;
 
     private final MetricsSampler.Listener listener = new MetricsSampler.Listener() {
         @Override
         public void onSample(MetricsSampler.MetricsSnapshot snapshot) {
             monitorStore.appendSample(snapshot);
+            monitorStore.recordForegroundProcessSnapshot(
+                    snapshot.timestampMillis,
+                    processInspector.collectRunningProcessesSnapshot());
             NotificationManager notificationManager =
                     (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (notificationManager != null) {
@@ -58,6 +62,7 @@ public final class MonitorForegroundService extends Service {
     public void onCreate() {
         super.onCreate();
         monitorStore = MonitorStore.get(this);
+        processInspector = new ProcessInspector(this);
         sampler = new MetricsSampler(this, 1000L);
         sampler.addListener(listener);
         ensureNotificationChannel();

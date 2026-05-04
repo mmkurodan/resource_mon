@@ -1,7 +1,6 @@
 package com.micklab.rm;
 
 import android.app.Activity;
-import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -13,7 +12,6 @@ import android.util.TypedValue;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
-import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -38,8 +36,7 @@ public final class ProcessDetailsActivity extends Activity {
     private TextView memoryDetailView;
     private TextView processNoteView;
     private TextView processListView;
-    private TextView recentAppsView;
-    private Button usageAccessButton;
+    private TextView foregroundHistoryView;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -98,21 +95,8 @@ public final class ProcessDetailsActivity extends Activity {
         summaryView = addSection(container, "Status");
         memoryDetailView = addSection(container, "Detailed RAM");
         processNoteView = addSection(container, "Access note");
-
-        usageAccessButton = new Button(this);
-        usageAccessButton.setText("Open usage access settings");
-        usageAccessButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                startActivity(processInspector.buildUsageAccessIntent());
-            }
-        });
-        LinearLayout.LayoutParams buttonParams = matchParentLayoutParams();
-        buttonParams.topMargin = dp(8);
-        container.addView(usageAccessButton, buttonParams);
-
-        processListView = addSection(container, "Running processes");
-        recentAppsView = addSection(container, "Recent apps");
+        processListView = addSection(container, "Running processes (foreground + background)");
+        foregroundHistoryView = addSection(container, "Foreground process history");
         return scrollView;
     }
 
@@ -124,8 +108,7 @@ public final class ProcessDetailsActivity extends Activity {
         ProcessInspector.ProcessReport report = processInspector.collect();
         processNoteView.setText(report.note);
         processListView.setText(buildProcessListText(report.processEntries));
-        recentAppsView.setText(buildRecentAppsText(report.recentApps));
-        usageAccessButton.setEnabled(!report.usageAccessGranted);
+        foregroundHistoryView.setText(buildForegroundHistoryText(monitorStore.getForegroundProcessHistory()));
     }
 
     private String buildSummaryText(MetricsSampler.MetricsSnapshot latestSample) {
@@ -190,6 +173,7 @@ public final class ProcessDetailsActivity extends Activity {
         for (ProcessInspector.ProcessEntry processEntry : processEntries) {
             lines.add(processEntry.label
                     + " (pid " + processEntry.pid + ", importance " + processEntry.importance + ")"
+                    + "\nState: " + processEntry.stateText
                     + "\nCPU: " + processEntry.cpuText
                     + " | Memory: " + processEntry.memoryText
                     + "\nAddress space: " + processEntry.addressSpaceText
@@ -199,20 +183,28 @@ public final class ProcessDetailsActivity extends Activity {
         return TextUtils.join("\n\n", lines);
     }
 
-    private String buildRecentAppsText(List<ProcessInspector.RecentAppEntry> recentApps) {
-        if (recentApps == null || recentApps.isEmpty()) {
-            return "Grant usage access to see recently used apps here.";
+    private String buildForegroundHistoryText(List<MonitorStore.ForegroundProcessStats> foregroundHistory) {
+        if (foregroundHistory == null || foregroundHistory.isEmpty()) {
+            return "No foreground process history has been recorded yet. Leave monitoring on and switch between apps to accumulate averages.";
         }
         List<String> lines = new ArrayList<>();
-        for (ProcessInspector.RecentAppEntry recentApp : recentApps) {
-            lines.add(recentApp.label
-                    + "\nPackage: " + recentApp.packageName
-                    + "\nLast used: " + DateUtils.getRelativeTimeSpanString(
-                            recentApp.lastTimeUsed,
+        for (MonitorStore.ForegroundProcessStats stats : foregroundHistory) {
+            String averageCpuText = stats.cpuSampleCount > 0
+                    ? formatPercent(stats.averageCpuPercent)
+                    : "Unavailable";
+            String averageMemoryText = stats.memorySampleCount > 0
+                    ? Formatter.formatShortFileSize(this, stats.averageMemoryKb * 1024L)
+                    : "Unavailable";
+            lines.add(stats.label
+                    + "\nProcess: " + stats.processName
+                    + "\nAvg CPU: " + averageCpuText
+                    + " | Avg memory: " + averageMemoryText
+                    + "\nForeground samples: " + stats.sampleCount
+                    + " | Last seen: " + DateUtils.getRelativeTimeSpanString(
+                            stats.lastSeenTimestamp,
                             System.currentTimeMillis(),
                             DateUtils.MINUTE_IN_MILLIS)
-                    + " | Foreground time: "
-                    + DateUtils.formatElapsedTime(recentApp.totalForegroundTimeMs / 1000L));
+                    + "\nPackages: " + stats.packageSummary);
         }
         return TextUtils.join("\n\n", lines);
     }

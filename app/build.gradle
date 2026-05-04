@@ -2,6 +2,49 @@ plugins {
     id 'com.android.application'
 }
 
+def parsePositiveInt = { String rawValue ->
+    if (rawValue == null || rawValue.trim().isEmpty()) {
+        return null
+    }
+    try {
+        int parsed = Integer.parseInt(rawValue.trim())
+        return parsed > 0 ? parsed : null
+    } catch (NumberFormatException ignored) {
+        return null
+    }
+}
+
+def shortSha = { String rawValue ->
+    if (rawValue == null || rawValue.trim().isEmpty()) {
+        return "local"
+    }
+    String normalized = rawValue.trim()
+    return normalized.length() <= 7 ? normalized : normalized.substring(0, 7)
+}
+
+def resolveAppVersion = {
+    Integer runNumber = parsePositiveInt(System.getenv("GITHUB_RUN_NUMBER"))
+    Integer runAttempt = parsePositiveInt(System.getenv("GITHUB_RUN_ATTEMPT"))
+    String gitSha = shortSha(System.getenv("GITHUB_SHA"))
+
+    if (runNumber != null) {
+        int resolvedAttempt = runAttempt != null ? Math.min(runAttempt, 99) : 1
+        return [
+                versionCode: (runNumber * 100) + resolvedAttempt,
+                versionName: "1.0.${runNumber}.${resolvedAttempt}+${gitSha}"
+        ]
+    }
+
+    long minutesSince2024 = Math.max(1L, Math.floorDiv(System.currentTimeMillis() - 1704067200000L, 60000L))
+    int localVersionCode = (int) Math.min(minutesSince2024, Integer.MAX_VALUE - 1L)
+    return [
+            versionCode: localVersionCode,
+            versionName: "1.0.local.${localVersionCode}+${gitSha}"
+    ]
+}
+
+def appVersion = resolveAppVersion()
+
 android {
     namespace "com.micklab.rm"
     compileSdk 35
@@ -10,8 +53,8 @@ android {
         applicationId "com.micklab.rm"
         minSdk 24
         targetSdk 35
-        versionCode 1
-        versionName "1.0"
+        versionCode appVersion.versionCode
+        versionName appVersion.versionName
     }
 
     signingConfigs {

@@ -8,16 +8,55 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public final class MonitorStore {
     private static final String PREFS_NAME = "monitor_store";
     private static final String KEY_MONITORING_ENABLED = "monitoring_enabled";
     private static final String KEY_LATEST_SAMPLE = "latest_sample";
     private static final String KEY_SAMPLE_HISTORY = "sample_history";
+    private static final String KEY_FOREGROUND_PROCESS_HISTORY = "foreground_process_history";
     private static final int MAX_HISTORY_SIZE = 240;
+    private static final int MAX_FOREGROUND_PROCESS_HISTORY_SIZE = 40;
 
     private static volatile MonitorStore instance;
+
+    public static final class ForegroundProcessStats {
+        public final String label;
+        public final String processName;
+        public final String packageSummary;
+        public final int sampleCount;
+        public final int cpuSampleCount;
+        public final int memorySampleCount;
+        public final double averageCpuPercent;
+        public final long averageMemoryKb;
+        public final long lastSeenTimestamp;
+
+        ForegroundProcessStats(
+                String label,
+                String processName,
+                String packageSummary,
+                int sampleCount,
+                int cpuSampleCount,
+                int memorySampleCount,
+                double averageCpuPercent,
+                long averageMemoryKb,
+                long lastSeenTimestamp) {
+            this.label = label;
+            this.processName = processName;
+            this.packageSummary = packageSummary;
+            this.sampleCount = sampleCount;
+            this.cpuSampleCount = cpuSampleCount;
+            this.memorySampleCount = memorySampleCount;
+            this.averageCpuPercent = averageCpuPercent;
+            this.averageMemoryKb = averageMemoryKb;
+            this.lastSeenTimestamp = lastSeenTimestamp;
+        }
+    }
 
     public static MonitorStore get(Context context) {
         if (instance == null) {
@@ -97,6 +136,92 @@ public final class MonitorStore {
         }
     }
 
+    public void recordForegroundProcessSnapshot(
+            long timestampMillis,
+            List<ProcessInspector.ProcessEntry> processEntries) {
+        synchronized (lock) {
+            Map<String, ForegroundProcessStats> statsByProcess = new HashMap<>();
+            JSONArray history = readArray(sharedPreferences.getString(KEY_FOREGROUND_PROCESS_HISTORY, "[]"));
+            for (int index = 0; index < history.length(); index++) {
+                ForegroundProcessStats stats = deserializeForegroundProcessStats(history.optJSONObject(index));
+                if (stats != null) {
+                    statsByProcess.put(stats.processName, stats);
+                }
+            }
+
+            for (ProcessInspector.ProcessEntry processEntry : processEntries) {
+                if (processEntry == null || !processEntry.foregroundLike) {
+                    continue;
+                }
+                ForegroundProcessStats current = statsByProcess.get(processEntry.processName);
+                int nextSampleCount = current == null ? 1 : current.sampleCount + 1;
+                int nextCpuSampleCount = current == null ? 0 : current.cpuSampleCount;
+                int nextMemorySampleCount = current == null ? 0 : current.memorySampleCount;
+                double cpuTotal = current == null ? 0d : current.averageCpuPercent * current.cpuSampleCount;
+                long memoryTotalKb = current == null ? 0L : current.averageMemoryKb * (long) current.memorySampleCount;
+
+                if (processEntry.hasCpuSample()) {
+                    cpuTotal += processEntry.cpuSortValue;
+                    nextCpuSampleCount += 1;
+                }
+                if (processEntry.hasMemorySample()) {
+                    memoryTotalKb += processEntry.memorySortValue;
+                    nextMemorySampleCount += 1;
+                }
+
+                statsByProcess.put(processEntry.processName, new ForegroundProcessStats(
+                        processEntry.label,
+                        processEntry.processName,
+                        processEntry.packageSummary,
+                        nextSampleCount,
+                        nextCpuSampleCount,
+                        nextMemorySampleCount,
+                        nextCpuSampleCount > 0 ? cpuTotal / nextCpuSampleCount : 0d,
+                        nextMemorySampleCount > 0
+                                ? Math.round(memoryTotalKb / (double) nextMemorySampleCount)
+                                : 0L,
+                        timestampMillis));
+            }
+
+            List<ForegroundProcessStats> sortedStats = new ArrayList<>(statsByProcess.values());
+            Collections.sort(sortedStats, new Comparator<ForegroundProcessStats>() {
+                @Override
+                public int compare(ForegroundProcessStats left, ForegroundProcessStats right) {
+                    int timeCompare = Long.compare(right.lastSeenTimestamp, left.lastSeenTimestamp);
+                    if (timeCompare != 0) {
+                        return timeCompare;
+                    }
+                    return Integer.compare(right.sampleCount, left.sampleCount);
+                }
+            });
+            if (sortedStats.size() > MAX_FOREGROUND_PROCESS_HISTORY_SIZE) {
+                sortedStats = new ArrayList<>(sortedStats.subList(0, MAX_FOREGROUND_PROCESS_HISTORY_SIZE));
+            }
+
+            JSONArray serialized = new JSONArray();
+            for (ForegroundProcessStats stats : sortedStats) {
+                serialized.put(serializeForegroundProcessStats(stats));
+            }
+            sharedPreferences.edit()
+                    .putString(KEY_FOREGROUND_PROCESS_HISTORY, serialized.toString())
+                    .apply();
+        }
+    }
+
+    public List<ForegroundProcessStats> getForegroundProcessHistory() {
+        synchronized (lock) {
+            JSONArray history = readArray(sharedPreferences.getString(KEY_FOREGROUND_PROCESS_HISTORY, "[]"));
+            List<ForegroundProcessStats> stats = new ArrayList<>();
+            for (int index = 0; index < history.length(); index++) {
+                ForegroundProcessStats entry = deserializeForegroundProcessStats(history.optJSONObject(index));
+                if (entry != null) {
+                    stats.add(entry);
+                }
+            }
+            return stats;
+        }
+    }
+
     private JSONObject serializeSnapshot(MetricsSampler.MetricsSnapshot snapshot) {
         JSONObject object = new JSONObject();
         try {
@@ -113,6 +238,24 @@ public final class MonitorStore {
             object.put("memoryDetails", serializeMemoryDetails(snapshot.memoryDetails));
         } catch (JSONException exception) {
             throw new IllegalStateException("Unable to serialize sample", exception);
+        }
+        return object;
+    }
+
+    private JSONObject serializeForegroundProcessStats(ForegroundProcessStats stats) {
+        JSONObject object = new JSONObject();
+        try {
+            object.put("label", stats.label);
+            object.put("processName", stats.processName);
+            object.put("packageSummary", stats.packageSummary);
+            object.put("sampleCount", stats.sampleCount);
+            object.put("cpuSampleCount", stats.cpuSampleCount);
+            object.put("memorySampleCount", stats.memorySampleCount);
+            object.put("averageCpuPercent", stats.averageCpuPercent);
+            object.put("averageMemoryKb", stats.averageMemoryKb);
+            object.put("lastSeenTimestamp", stats.lastSeenTimestamp);
+        } catch (JSONException exception) {
+            throw new IllegalStateException("Unable to serialize foreground process stats", exception);
         }
         return object;
     }
@@ -187,6 +330,26 @@ public final class MonitorStore {
                 object.optLong("commitLimitBytes", 0L),
                 object.optLong("vmallocUsedBytes", 0L),
                 object.optLong("vmallocTotalBytes", 0L));
+    }
+
+    private ForegroundProcessStats deserializeForegroundProcessStats(JSONObject object) {
+        if (object == null) {
+            return null;
+        }
+        String processName = object.optString("processName", null);
+        if (processName == null || processName.trim().isEmpty()) {
+            return null;
+        }
+        return new ForegroundProcessStats(
+                object.optString("label", processName),
+                processName,
+                object.optString("packageSummary", processName),
+                object.optInt("sampleCount", 0),
+                object.optInt("cpuSampleCount", 0),
+                object.optInt("memorySampleCount", 0),
+                object.optDouble("averageCpuPercent", 0d),
+                object.optLong("averageMemoryKb", 0L),
+                object.optLong("lastSeenTimestamp", 0L));
     }
 
     private JSONArray readArray(String raw) {

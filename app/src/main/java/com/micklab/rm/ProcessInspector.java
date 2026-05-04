@@ -1,14 +1,10 @@
 package com.micklab.rm;
 
 import android.app.ActivityManager;
-import android.app.usage.UsageStats;
-import android.app.usage.UsageStatsManager;
 import android.content.Context;
-import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.os.Debug;
-import android.provider.Settings;
 import android.text.TextUtils;
 
 import java.io.BufferedReader;
@@ -23,13 +19,13 @@ import java.util.Locale;
 import java.util.Map;
 
 public final class ProcessInspector {
-    private static final long RECENT_APP_WINDOW_MS = 30L * 60L * 1000L;
-
     public static final class ProcessEntry {
         public final String label;
         public final String processName;
         public final int pid;
         public final int importance;
+        public final boolean foregroundLike;
+        public final String stateText;
         public final String memoryText;
         public final String cpuText;
         public final String addressSpaceText;
@@ -42,6 +38,8 @@ public final class ProcessInspector {
                 String processName,
                 int pid,
                 int importance,
+                boolean foregroundLike,
+                String stateText,
                 String memoryText,
                 String cpuText,
                 String addressSpaceText,
@@ -52,6 +50,8 @@ public final class ProcessInspector {
             this.processName = processName;
             this.pid = pid;
             this.importance = importance;
+            this.foregroundLike = foregroundLike;
+            this.stateText = stateText;
             this.memoryText = memoryText;
             this.cpuText = cpuText;
             this.addressSpaceText = addressSpaceText;
@@ -59,37 +59,25 @@ public final class ProcessInspector {
             this.cpuSortValue = cpuSortValue;
             this.packageSummary = packageSummary;
         }
-    }
 
-    public static final class RecentAppEntry {
-        public final String label;
-        public final String packageName;
-        public final long lastTimeUsed;
-        public final long totalForegroundTimeMs;
+        public boolean hasCpuSample() {
+            return cpuSortValue >= 0d;
+        }
 
-        RecentAppEntry(String label, String packageName, long lastTimeUsed, long totalForegroundTimeMs) {
-            this.label = label;
-            this.packageName = packageName;
-            this.lastTimeUsed = lastTimeUsed;
-            this.totalForegroundTimeMs = totalForegroundTimeMs;
+        public boolean hasMemorySample() {
+            return memorySortValue > 0L;
         }
     }
 
     public static final class ProcessReport {
         public final String note;
-        public final boolean usageAccessGranted;
         public final List<ProcessEntry> processEntries;
-        public final List<RecentAppEntry> recentApps;
 
         ProcessReport(
                 String note,
-                boolean usageAccessGranted,
-                List<ProcessEntry> processEntries,
-                List<RecentAppEntry> recentApps) {
+                List<ProcessEntry> processEntries) {
             this.note = note;
-            this.usageAccessGranted = usageAccessGranted;
             this.processEntries = processEntries;
-            this.recentApps = recentApps;
         }
     }
 
@@ -124,7 +112,6 @@ public final class ProcessInspector {
     private final Context context;
     private final ActivityManager activityManager;
     private final PackageManager packageManager;
-    private final UsageStatsManager usageStatsManager;
     private final Map<Integer, ProcessCpuSample> previousProcessSamples = new HashMap<>();
 
     private CpuTotals previousCpuTotals;
@@ -134,32 +121,24 @@ public final class ProcessInspector {
         this.activityManager =
                 (ActivityManager) this.context.getSystemService(Context.ACTIVITY_SERVICE);
         this.packageManager = this.context.getPackageManager();
-        this.usageStatsManager =
-                (UsageStatsManager) this.context.getSystemService(Context.USAGE_STATS_SERVICE);
     }
 
     public ProcessReport collect() {
         List<ProcessEntry> entries = collectRunningProcesses();
-        boolean usageAccessGranted = hasUsageAccess();
-        List<RecentAppEntry> recentApps = usageAccessGranted ? collectRecentApps() : Collections.<RecentAppEntry>emptyList();
-
         StringBuilder noteBuilder = new StringBuilder();
-        noteBuilder.append("Per-process CPU and memory are best-effort on Android. ")
-                .append("Newer Android versions often hide other apps' live stats unless the device is rooted or the app has privileged access.");
+        noteBuilder.append("Current process metrics include foreground and background processes that Android exposed to this app. ")
+                .append("Foreground history averages are recorded while monitoring is on and the process importance is FOREGROUND or VISIBLE.");
+        noteBuilder.append("\nPer-process CPU and memory remain best-effort on Android; newer versions often hide other apps' live stats unless the device is rooted or the app has privileged access.");
         if (entries.isEmpty()) {
             noteBuilder.append("\nNo running processes were exposed to this app via ActivityManager.");
         } else if (entries.size() == 1) {
             noteBuilder.append("\nOnly one visible process was exposed; this is normal on modern Android builds.");
         }
-        if (!usageAccessGranted) {
-            noteBuilder.append("\nUsage access is off, so the recent-app view is limited.");
-        }
-
-        return new ProcessReport(noteBuilder.toString(), usageAccessGranted, entries, recentApps);
+        return new ProcessReport(noteBuilder.toString(), entries);
     }
 
-    public Intent buildUsageAccessIntent() {
-        return new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS);
+    public List<ProcessEntry> collectRunningProcessesSnapshot() {
+        return collectRunningProcesses();
     }
 
     private List<ProcessEntry> collectRunningProcesses() {
@@ -216,6 +195,8 @@ public final class ProcessInspector {
 
             ProcessAddressSpaceSample addressSpaceSample = readProcessAddressSpace(processInfo.pid);
             String addressSpaceText = formatAddressSpace(addressSpaceSample);
+            boolean foregroundLike = isForegroundLike(processInfo.importance);
+            String stateText = describeImportance(processInfo.importance);
 
             String packageSummary = processInfo.pkgList == null || processInfo.pkgList.length == 0
                     ? processInfo.processName
@@ -225,6 +206,8 @@ public final class ProcessInspector {
                     processInfo.processName,
                     processInfo.pid,
                     processInfo.importance,
+                    foregroundLike,
+                    stateText,
                     memoryText,
                     cpuText,
                     addressSpaceText,
@@ -256,57 +239,6 @@ public final class ProcessInspector {
             }
         });
         return entries;
-    }
-
-    private List<RecentAppEntry> collectRecentApps() {
-        if (usageStatsManager == null) {
-            return Collections.emptyList();
-        }
-        long endTime = System.currentTimeMillis();
-        long startTime = endTime - RECENT_APP_WINDOW_MS;
-        List<UsageStats> usageStats = usageStatsManager.queryUsageStats(
-                UsageStatsManager.INTERVAL_DAILY,
-                startTime,
-                endTime);
-        if (usageStats == null || usageStats.isEmpty()) {
-            return Collections.emptyList();
-        }
-
-        List<RecentAppEntry> recentApps = new ArrayList<>();
-        for (UsageStats usageStat : usageStats) {
-            if (usageStat == null || usageStat.getLastTimeUsed() <= 0L) {
-                continue;
-            }
-            recentApps.add(new RecentAppEntry(
-                    resolveLabel(usageStat.getPackageName(), usageStat.getPackageName()),
-                    usageStat.getPackageName(),
-                    usageStat.getLastTimeUsed(),
-                    usageStat.getTotalTimeInForeground()));
-        }
-
-        Collections.sort(recentApps, new Comparator<RecentAppEntry>() {
-            @Override
-            public int compare(RecentAppEntry left, RecentAppEntry right) {
-                return Long.compare(right.lastTimeUsed, left.lastTimeUsed);
-            }
-        });
-
-        if (recentApps.size() > 10) {
-            return new ArrayList<>(recentApps.subList(0, 10));
-        }
-        return recentApps;
-    }
-
-    private boolean hasUsageAccess() {
-        if (usageStatsManager == null) {
-            return false;
-        }
-        long endTime = System.currentTimeMillis();
-        List<UsageStats> usageStats = usageStatsManager.queryUsageStats(
-                UsageStatsManager.INTERVAL_DAILY,
-                endTime - 5L * 60L * 1000L,
-                endTime);
-        return usageStats != null && !usageStats.isEmpty();
     }
 
     private String resolveLabel(ActivityManager.RunningAppProcessInfo processInfo) {
@@ -451,5 +383,31 @@ public final class ProcessInspector {
             return formatKilobytes(sample.currentKb);
         }
         return "Peak " + formatKilobytes(sample.peakKb);
+    }
+
+    private boolean isForegroundLike(int importance) {
+        return importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE;
+    }
+
+    private String describeImportance(int importance) {
+        if (importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND) {
+            return "Foreground";
+        }
+        if (importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE) {
+            return "Foreground service";
+        }
+        if (importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_PERCEPTIBLE) {
+            return "Perceptible";
+        }
+        if (importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE) {
+            return "Visible";
+        }
+        if (importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_SERVICE) {
+            return "Service";
+        }
+        if (importance >= ActivityManager.RunningAppProcessInfo.IMPORTANCE_CACHED) {
+            return "Cached";
+        }
+        return "Background";
     }
 }
