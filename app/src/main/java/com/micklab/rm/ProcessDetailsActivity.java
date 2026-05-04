@@ -35,6 +35,7 @@ public final class ProcessDetailsActivity extends Activity {
     private TextView summaryView;
     private TextView memoryDetailView;
     private TextView processNoteView;
+    private TextView appListView;
     private TextView processListView;
     private TextView foregroundHistoryView;
 
@@ -95,7 +96,8 @@ public final class ProcessDetailsActivity extends Activity {
         summaryView = addSection(container, "Status");
         memoryDetailView = addSection(container, "Detailed RAM");
         processNoteView = addSection(container, "Access note");
-        processListView = addSection(container, "Running processes (foreground + background)");
+        appListView = addSection(container, "Running applications (/proc + ActivityManager)");
+        processListView = addSection(container, "Running processes (/proc scan)");
         foregroundHistoryView = addSection(container, "Foreground process history");
         return scrollView;
     }
@@ -107,6 +109,7 @@ public final class ProcessDetailsActivity extends Activity {
 
         ProcessInspector.ProcessReport report = processInspector.collect();
         processNoteView.setText(report.note);
+        appListView.setText(buildAppListText(report.appEntries));
         processListView.setText(buildProcessListText(report.processEntries));
         foregroundHistoryView.setText(buildForegroundHistoryText(monitorStore.getForegroundProcessHistory()));
     }
@@ -167,18 +170,48 @@ public final class ProcessDetailsActivity extends Activity {
 
     private String buildProcessListText(List<ProcessInspector.ProcessEntry> processEntries) {
         if (processEntries == null || processEntries.isEmpty()) {
-            return "No process information was exposed by Android.";
+            return "No process information was visible via /proc.";
         }
         List<String> lines = new ArrayList<>();
         for (ProcessInspector.ProcessEntry processEntry : processEntries) {
-            lines.add(processEntry.label
-                    + " (pid " + processEntry.pid + ", importance " + processEntry.importance + ")"
-                    + "\nState: " + processEntry.stateText
-                    + "\nCPU: " + processEntry.cpuText
-                    + " | Memory: " + processEntry.memoryText
-                    + "\nAddress space: " + processEntry.addressSpaceText
-                    + "\nProcess: " + processEntry.processName
-                    + "\nPackages: " + processEntry.packageSummary);
+            StringBuilder builder = new StringBuilder();
+            builder.append(processEntry.label)
+                    .append(" (pid ").append(processEntry.pid)
+                    .append(", uid ").append(processEntry.uid).append(')');
+            if (processEntry.hasImportance()) {
+                builder.append(" | Importance ").append(processEntry.importance);
+            }
+            builder.append("\nState: ").append(processEntry.stateText);
+            builder.append("\nCPU: ").append(processEntry.cpuText)
+                    .append(" | Memory: ").append(processEntry.memoryText);
+            builder.append("\nAddress space: ").append(processEntry.addressSpaceText);
+            builder.append("\nLinux state: ").append(processEntry.linuxStateText);
+            builder.append("\nProcess: ").append(processEntry.processName);
+            builder.append("\nPackages: ").append(processEntry.packageSummary);
+            lines.add(builder.toString());
+        }
+        return TextUtils.join("\n\n", lines);
+    }
+
+    private String buildAppListText(List<ProcessInspector.AppEntry> appEntries) {
+        if (appEntries == null || appEntries.isEmpty()) {
+            return "No running application aggregates were visible via /proc.";
+        }
+        List<String> lines = new ArrayList<>();
+        for (ProcessInspector.AppEntry appEntry : appEntries) {
+            StringBuilder builder = new StringBuilder();
+            builder.append(appEntry.label)
+                    .append(" (uid ").append(appEntry.uid).append(')');
+            builder.append("\nProcesses: ").append(appEntry.processCount);
+            if (appEntry.hasImportance()) {
+                builder.append(" | Importance ").append(appEntry.importance);
+            }
+            builder.append("\nState: ").append(appEntry.stateText);
+            builder.append("\nCPU: ").append(appEntry.cpuText)
+                    .append(" | Memory: ").append(appEntry.memoryText);
+            builder.append("\nAddress space: ").append(appEntry.addressSpaceText);
+            builder.append("\nPackages: ").append(appEntry.packageSummary);
+            lines.add(builder.toString());
         }
         return TextUtils.join("\n\n", lines);
     }
