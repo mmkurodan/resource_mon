@@ -1,2 +1,12 @@
 app/release.keystore
 app/release.keystore.base64
+
+# Build outputs
+.gradle/
+build/
+app/build/
+.tmp-aapt2/
+
+# Local verification artifacts
+test_logs_*/
+downloads/
