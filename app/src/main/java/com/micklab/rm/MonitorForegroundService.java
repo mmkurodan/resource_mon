@@ -41,15 +41,11 @@ public final class MonitorForegroundService extends Service {
 
     private MetricsSampler sampler;
     private MonitorStore monitorStore;
-    private ProcessInspector processInspector;
 
     private final MetricsSampler.Listener listener = new MetricsSampler.Listener() {
         @Override
         public void onSample(MetricsSampler.MetricsSnapshot snapshot) {
             monitorStore.appendSample(snapshot);
-            monitorStore.recordForegroundProcessSnapshot(
-                    snapshot.timestampMillis,
-                    processInspector.collectRunningProcessesSnapshot());
             NotificationManager notificationManager =
                     (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (notificationManager != null) {
@@ -62,7 +58,6 @@ public final class MonitorForegroundService extends Service {
     public void onCreate() {
         super.onCreate();
         monitorStore = MonitorStore.get(this);
-        processInspector = new ProcessInspector(this);
         sampler = new MetricsSampler(this, 1000L);
         sampler.addListener(listener);
         ensureNotificationChannel();
@@ -142,13 +137,6 @@ public final class MonitorForegroundService extends Service {
                 new Intent(this, MonitorForegroundService.class).setAction(ACTION_STOP),
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
 
-        PendingIntent detailIntent = PendingIntent.getActivity(
-                this,
-                3,
-                new Intent(this, ProcessDetailsActivity.class)
-                        .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP),
-                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-
         String title = "Resource monitor recording";
         String contentText = snapshot == null
                 ? "Starting background monitoring..."
@@ -179,10 +167,6 @@ public final class MonitorForegroundService extends Service {
                 .setContentIntent(contentIntent)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
-                .addAction(new Action.Builder(
-                        android.R.drawable.ic_menu_recent_history,
-                        "Details",
-                        detailIntent).build())
                 .addAction(new Action.Builder(
                         android.R.drawable.ic_menu_close_clear_cancel,
                         "Stop",

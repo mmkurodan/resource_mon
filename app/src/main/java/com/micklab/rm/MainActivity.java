@@ -2,7 +2,6 @@ package com.micklab.rm;
 
 import android.Manifest;
 import android.app.Activity;
-import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -164,18 +163,6 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams stopParams = weightedLayoutParams();
         stopParams.leftMargin = dp(8);
         actionRow.addView(stopButton, stopParams);
-
-        Button detailButton = new Button(this);
-        detailButton.setText("Details / Processes");
-        detailButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                startActivity(new Intent(MainActivity.this, ProcessDetailsActivity.class));
-            }
-        });
-        LinearLayout.LayoutParams detailParams = weightedLayoutParams();
-        detailParams.leftMargin = dp(8);
-        actionRow.addView(detailButton, detailParams);
 
         LinearLayout miniMonitor = new LinearLayout(this);
         miniMonitor.setOrientation(LinearLayout.HORIZONTAL);
